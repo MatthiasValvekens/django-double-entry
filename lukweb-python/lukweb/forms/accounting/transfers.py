@@ -8,8 +8,8 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
-from lukweb import payments, models
-from lukweb.payments import _dt_fallback
+from ... import payments, models
+from ...payments import _dt_fallback
 from . import internal, ticketing
 from ..utils import ParserErrorMixin
 

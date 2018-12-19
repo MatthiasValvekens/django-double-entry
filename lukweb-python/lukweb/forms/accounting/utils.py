@@ -6,8 +6,8 @@ from django.utils.translation import (
     ugettext_lazy as _,
 )
 
-from lukweb import payments, models
-from lukweb.widgets import (
+from ... import payments, models
+from ...widgets import (
     DatalistInputWidget,
 )
 

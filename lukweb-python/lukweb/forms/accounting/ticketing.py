@@ -5,8 +5,8 @@ from django.db import transaction
 from django.forms.models import ModelForm, modelformset_factory
 from djmoney.forms import MoneyField
 
-from lukweb import models
-from lukweb.tasks import dispatch_tickets
+from ... import models
+from ...tasks import dispatch_tickets
 
 logger = logging.getLogger(__name__)
 

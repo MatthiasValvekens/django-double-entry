@@ -15,9 +15,9 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
-from lukweb import payments, models
-from lukweb.payments import _dt_fallback
-from lukweb.widgets import (
+from ... import payments, models
+from ...payments import _dt_fallback
+from ...widgets import (
     DatalistInputWidget, MoneyWidget,
 )
 from .utils import GnuCashFieldMixin
