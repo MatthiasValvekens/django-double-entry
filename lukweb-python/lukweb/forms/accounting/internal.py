@@ -73,7 +73,7 @@ class EphemeralAddDebtForm(ModelForm):
 
     class Meta:
         model = models.InternalDebtItem
-        fields = ('comment', 'amount', 'timestamp')
+        fields = ('comment', 'total_amount', 'timestamp')
 
 
 class ProfileAddDebtForm(GnuCashFieldMixin):
@@ -86,10 +86,10 @@ class ProfileAddDebtForm(GnuCashFieldMixin):
 
     class Meta:
         model = models.InternalDebtItem
-        fields = ('amount', 'comment')
+        fields = ('total_amount', 'comment')
         widgets = {
             'comment': forms.TextInput(attrs={'size': 30}),
-            'amount': MoneyWidget
+            'total_amount': MoneyWidget
         }
 
     def __init__(self, member, *args, **kwargs):
@@ -305,7 +305,7 @@ class AddDebtFormsetPopulator(FetchMembersMixin):
                     'email': member.user.email,
                     'member_id': member.pk,
                     'name': member.full_name,
-                    'amount': dinfo.amount,
+                    'total_amount': dinfo.amount,
                     'gnucash': dinfo.gnucash,
                     'comment': dinfo.comment,
                     'filter_slug': dinfo.filter_slug,
@@ -338,7 +338,7 @@ class BaseBulkAddDebtFormSet(forms.BaseModelFormSet):
                     gnucash_cache[gnucash_raw] = gnucash_category
 
                 yield models.InternalDebtItem(
-                    amount=data['amount'],
+                    total_amount=data['total_amount'],
                     member_id=data['member_id'],
                     comment=data['comment'],
                     gnucash_category=gnucash_category,
@@ -604,7 +604,7 @@ class IPSFormDebtChoiceIterator(forms.models.ModelChoiceIterator):
             ) % {
                 'date': timezone.localdate(obj.timestamp),
                 'balance': obj.balance,
-                'total': obj.amount,
+                'total': obj.total_amount,
                 'comment': obj.comment,
             }
         )
@@ -649,14 +649,7 @@ class InlinePaymentSplitFormSet(forms.BaseInlineFormSet):
     def clean(self):
         if any(self.errors):
             return
-        # TODO in hindsight, we should have used the same identifier
-        #  for both total fields, but changing it now seems risky
-        if isinstance(self.instance, models.InternalPayment):
-            max_total = self.instance.total_amount
-        elif isinstance(self.instance, models.InternalDebtItem):
-            max_total = self.instance.amount
-        else:
-            raise TypeError
+        max_total = self.instance.total_amount
 
         def split_amounts():
             for form in self.forms:
