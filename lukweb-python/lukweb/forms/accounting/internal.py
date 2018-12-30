@@ -630,14 +630,12 @@ class InlinePaymentSplitFormSet(forms.BaseInlineFormSet):
     def _admissible_counterpart_queryset(self):
         if isinstance(self.instance, models.InternalDebtItem):
             counterpart_id = 'payment_id'
-            base_qs = self.instance.member.payments.with_debts().filter(
-                fully_used_fromdb=False
-            ).order_by('-timestamp')
+            base_qs = self.instance.member.payments.with_debts()\
+                .credit_remaining().order_by('-timestamp')
         elif isinstance(self.instance, models.InternalPayment):
             counterpart_id = 'debt_id'
-            base_qs = self.instance.member.debts.with_payments().filter(
-                paid_fromdb=False
-            ).order_by('-timestamp')
+            base_qs = self.instance.member.debts.with_payments()\
+                .unpaid().order_by('-timestamp')
         else:
             raise TypeError
 
