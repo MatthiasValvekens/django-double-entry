@@ -16,6 +16,7 @@ from djmoney.models.fields import MoneyField
 from djmoney.models.validators import MinMoneyValidator
 from djmoney.money import Money
 from django.db.models.fields.reverse_related import ManyToOneRel
+from django.conf import settings
 
 from ...payments import decimal_to_money
 
@@ -150,11 +151,13 @@ class BaseFinancialRecord(DoubleBookModel):
         verbose_name=_('total amount'),
         decimal_places=2,
         max_digits=6,
-        default_currency='EUR',
+        default_currency=settings.BOOKKEEPING_CURRENCY,
         # TODO this is a bit crufty, we should implement
         # a proper StrictMinValueValidator and mix
         # BaseMoneyValidator into that.
-        validators=[MinMoneyValidator(Money(0.01, 'EUR'))]
+        validators=[
+            MinMoneyValidator(Money(0.01, settings.BOOKKEEPING_CURRENCY))
+        ]
     )
 
     timestamp = models.DateTimeField(
@@ -317,9 +320,11 @@ class BaseTransactionSplit(models.Model):
         verbose_name=_('amount'),
         decimal_places=2,
         max_digits=6,
-        default_currency='EUR',
+        default_currency=settings.BOOKKEEPING_CURRENCY,
         # TODO see BaseFinancialRecord.amount
-        validators=[MinMoneyValidator(Money(0.01, 'EUR'))]
+        validators=[
+            MinMoneyValidator(Money(0.01, settings.BOOKKEEPING_CURRENCY))
+        ]
     )
     
     class Meta:

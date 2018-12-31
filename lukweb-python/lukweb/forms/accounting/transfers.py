@@ -70,7 +70,9 @@ class ElectronicPaymentPopulator(ParserErrorMixin):
         def populate_debt_formset(member):
             tinfos = internaldebt_ix[member.payment_tracking_no]
             dupcheck = defaultdict(list)
-            total_contribution = Money(Decimal('0.00'), 'EUR')
+            total_contribution = Money(
+                Decimal('0.00'), settings.BOOKKEEPING_CURRENCY
+            )
             for tinfo in tinfos:
                 k = internal.bucket_key(member, tinfo)
                 occ_so_far = dupcheck[k]

@@ -22,6 +22,7 @@ from ...widgets import (
 )
 from .utils import GnuCashFieldMixin
 from ..utils import ParserErrorMixin, CSVUploadForm
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ class MiscDebtPaymentPopulator(FetchMembersMixin):
             member, tinfos, member_str = t
             dupcheck = defaultdict(list)
             contribution_by_category = defaultdict(
-                lambda: Money(Decimal('0.00'), 'EUR')
+                lambda: Money(Decimal('0.00'), settings.BOOKKEEPING_CURRENCY)
             )
             for tinfo in tinfos:
                 if tinfo.amount.amount < 0:
@@ -237,7 +238,7 @@ class MiscDebtPaymentPopulator(FetchMembersMixin):
             # save to debt_contributions
             self.debt_contributions[member] = sum(
                 contribution_by_category.values(),
-                Money(Decimal('0.00'), 'EUR')
+                Money(Decimal('0.00'), settings.BOOKKEEPING_CURRENCY)
             )
 
             # report on possible duplicates
@@ -660,7 +661,7 @@ class InlinePaymentSplitFormSet(forms.BaseInlineFormSet):
 
         split_total = sum(
             split_amounts(),
-            Money(Decimal('0'), 'EUR')
+            Money(Decimal('0'), settings.BOOKKEEPING_CURRENCY)
         )
 
         if split_total > max_total:
