@@ -7,13 +7,13 @@ from django.db.models import (
     Value, ExpressionWrapper
 )
 from django.db.models.functions import Coalesce
+from django.forms import ValidationError
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import (
     ugettext_lazy as _, pgettext_lazy,
 )
 from djmoney.models.fields import MoneyField
-from djmoney.models.validators import MinMoneyValidator
 from djmoney.money import Money
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
@@ -23,11 +23,19 @@ from ...payments import decimal_to_money
 __all__ = [
     'DoubleBookModel', 'BaseFinancialRecord', 'BaseDebtRecord',
     'BasePaymentRecord', 'BaseDebtQuerySet', 'BasePaymentQuerySet',
-    'BaseTransactionSplit', 'DoubleBookQuerySet'
+    'BaseTransactionSplit', 'DoubleBookQuerySet', 'nonzero_money_validator'
 ]
 
 logger = logging.getLogger(__name__)
 
+
+def nonzero_money_validator(money):
+    if money.amount <= 0:
+        raise ValidationError(
+            pgettext_lazy(
+                'accounting', 'Amount should be strictly greater than zero.'
+            )
+        )
 
 class DoubleBookModel(models.Model):
     _split_manager_name = None
@@ -152,12 +160,7 @@ class BaseFinancialRecord(DoubleBookModel):
         decimal_places=2,
         max_digits=6,
         default_currency=settings.BOOKKEEPING_CURRENCY,
-        # TODO this is a bit crufty, we should implement
-        # a proper StrictMinValueValidator and mix
-        # BaseMoneyValidator into that.
-        validators=[
-            MinMoneyValidator(Money(0.01, settings.BOOKKEEPING_CURRENCY))
-        ]
+        validators=[nonzero_money_validator]
     )
 
     timestamp = models.DateTimeField(
@@ -321,10 +324,7 @@ class BaseTransactionSplit(models.Model):
         decimal_places=2,
         max_digits=6,
         default_currency=settings.BOOKKEEPING_CURRENCY,
-        # TODO see BaseFinancialRecord.amount
-        validators=[
-            MinMoneyValidator(Money(0.01, settings.BOOKKEEPING_CURRENCY))
-        ]
+        validators=[nonzero_money_validator]
     )
     
     class Meta:
