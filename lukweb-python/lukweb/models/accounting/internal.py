@@ -172,6 +172,7 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
 
 
 class InternalPayment(accounting_base.BasePaymentRecord):
+
     member = ChoirMemberField(
         on_delete=models.PROTECT,
         verbose_name=_('involved member'),
@@ -201,12 +202,6 @@ class InternalPayment(accounting_base.BasePaymentRecord):
     nature = models.PositiveSmallIntegerField(
         verbose_name=_('payment nature'),
         choices=PAYMENT_NATURE_CHOICES
-    )
-
-    processed = models.DateTimeField(
-        verbose_name=_('processing timestamp'),
-        default=timezone.now,
-        editable=False
     )
 
     class Meta:

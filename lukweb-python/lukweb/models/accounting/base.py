@@ -42,6 +42,21 @@ class DoubleBookModel(models.Model):
     _split_model = None
     _remote_target_field = None
 
+    timestamp = models.DateTimeField(
+        verbose_name=pgettext_lazy(
+            'accounting', 'transaction timestamp'
+        ),
+        default=timezone.now
+    )
+
+    processed = models.DateTimeField(
+        verbose_name=pgettext_lazy(
+            'accounting', 'processing timestamp'
+        ),
+        default=timezone.now,
+        editable=False
+    )
+
     class Meta:
         abstract = True
 
@@ -162,15 +177,6 @@ class BaseFinancialRecord(DoubleBookModel):
         default_currency=settings.BOOKKEEPING_CURRENCY,
         validators=[nonzero_money_validator]
     )
-
-    timestamp = models.DateTimeField(
-        verbose_name=pgettext_lazy(
-            'accounting', 'transaction timestamp'
-        ),
-        default=timezone.now
-    )
-
-    # TODO: migrate processed field to here (needs data migration for IDI)
 
     class Meta:
         abstract = True
