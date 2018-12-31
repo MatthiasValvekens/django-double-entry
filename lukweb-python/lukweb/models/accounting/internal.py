@@ -59,14 +59,13 @@ class GnuCashCategory(models.Model):
 class IDIQuerySet(accounting_base.BaseDebtQuerySet):
 
     def balances_by_filter_slug(self, filter_slugs=None, skip_zeroes=False):
-        # again, assume with_payments
         # returns a per-filter tally of all debt balances
-        qs = self.unpaid().values_list('filter_slug').order_by()
+        qs = self.with_payments().unpaid().values_list('filter_slug').order_by()
         if filter_slugs:
             qs = qs.filter(filter_slug__in=filter_slugs)
         qs = qs.annotate(
             total_balance=Coalesce(
-                Sum(IDIQuerySet.MATCHED_BALANCE_FIELD), Value(Decimal('0.00')),
+                Sum(IDIQuerySet.UNMATCHED_BALANCE_FIELD), Value(Decimal('0.00')),
             )
         )
         return {
