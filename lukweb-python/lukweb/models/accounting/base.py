@@ -37,6 +37,7 @@ def nonzero_money_validator(money):
             )
         )
 
+
 class DoubleBookModel(models.Model):
     _split_manager_name = None
     _split_model = None
@@ -152,7 +153,7 @@ class DoubleBookModel(models.Model):
                 'PERFORMANCE WARNING: '
                 'falling back to database deluge '
                 'for matched_balance computation. '
-                'Please review queryset usage.', e
+                'Please review queryset usage.'
             )
             splits = self.split_manager
             return decimal_to_money(
@@ -339,6 +340,7 @@ class BasePaymentRecord(BaseFinancialRecord):
         return self.fully_matched
     
 
+# TODO: can we auto-enforce unique_together?
 class BaseTransactionSplit(models.Model):
 
     amount = MoneyField(
@@ -351,3 +353,11 @@ class BaseTransactionSplit(models.Model):
     
     class Meta:
         abstract = True
+
+    @classmethod
+    def get_double_book_models(cls):
+        return {
+            f.name: f.related_model for f in cls._meta.get_fields()
+            if isinstance(f, models.ForeignKey) 
+            and issubclass(f.related_model, DoubleBookModel)
+        }
