@@ -41,6 +41,7 @@ class DoubleBookModel(models.Model):
     _split_manager_name = None
     _split_model = None
     _remote_target_field = None
+    _other_half_model = None
 
     timestamp = models.DateTimeField(
         verbose_name=pgettext_lazy(
@@ -65,6 +66,13 @@ class DoubleBookModel(models.Model):
         """
         Find the split relation to use through reflection.
         """ 
+        def get_fks_on_split(split_model):
+            return [
+                f for f in split_model._meta.get_fields()
+                if isinstance(f, models.ForeignKey)
+                and issubclass(f.related_model, DoubleBookModel)
+            ]
+            
         def is_candidate(field):
             # we're only interested in many2one fields
             if not isinstance(field, ManyToOneRel):
@@ -73,22 +81,17 @@ class DoubleBookModel(models.Model):
             if not issubclass(remote_model, BaseTransactionSplit):
                 return False
             # count the number of DoubleBookModel fk's
-            # on the remote model. It should be exactly 2.
-            # TODO: technically, it might be OK to have a self-referencing
-            #  double book model. If/when we have decent unit testing
-            #  we should look into supporting that. For now, this check
-            #  won't attempt to block this particular case, but that might
-            #  change in the future
-            doublebook_fk_count = len([
-                f for f in remote_model._meta.get_fields()
-                if isinstance(f, models.ForeignKey)
-                and issubclass(f.related_model, DoubleBookModel)
-            ])
-            return doublebook_fk_count == 2
+            # on the remote model. It should be exactly 2,
+            # and they should point to different models
+            remote_fks = get_fks_on_split(remote_model)
+            doublebook_fk_count = len(remote_fks)
+            doublebook_fk_model_count = len(
+                set(f.related_model for f in remote_fks)
+            )
+            return doublebook_fk_count == doublebook_fk_model_count == 2
            
         candidates = [
-            f for f in cls._meta.get_fields()
-            if is_candidate(f)
+            f for f in cls._meta.get_fields() if is_candidate(f)
         ]
         if not candidates:
             raise TypeError(
@@ -107,12 +110,25 @@ class DoubleBookModel(models.Model):
         cls._split_model = split_rel.related_model
         cls._split_manager_name = split_rel.name
         cls._remote_target_field = split_rel.remote_field.name
+        
+        # the is_candidate condition guarantees that this works
+        split_fk_1, split_fk_2 = get_fks_on_split(cls._split_model)
+        if split_fk_1.related_model == cls:
+            cls._other_half_model = split_fk_2.related_model
+        else:
+            cls._other_half_model = split_fk_1.related_model
 
     @classmethod
     def get_split_model(cls):
         if cls._split_model is None:
             cls._prepare_split_metadata()
         return cls._split_model, cls._remote_target_field
+
+    @classmethod
+    def get_other_half_model(cls):
+        if cls._other_half_model is None:
+            cls._prepare_split_metadata()
+        return cls._other_half_model
 
     @property
     def split_manager(self):
