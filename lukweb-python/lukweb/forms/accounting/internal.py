@@ -5,24 +5,25 @@ from decimal import Decimal
 from itertools import chain
 
 from django import forms
+from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
-from django.forms import ValidationError
+from django.db.models import Q
 from django.forms.models import ModelForm, modelformset_factory
 from django.utils import timezone
-from django.utils.functional import cached_property
 from django.utils.translation import (
     ugettext_lazy as _,
 )
 from djmoney.money import Money
 
+from . import base
+from .base import *
+from .utils import GnuCashFieldMixin
+from ..utils import ParserErrorMixin, CSVUploadForm
 from ... import payments, models
 from ...payments import _dt_fallback
 from ...widgets import (
     DatalistInputWidget, MoneyWidget,
 )
-from .utils import GnuCashFieldMixin
-from ..utils import ParserErrorMixin, CSVUploadForm
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,8 @@ __all__ = [
     'MiscDebtPaymentPopulator', 'AddDebtFormsetPopulator',
     'BulkAddDebtFormSet', 'BulkPaymentFormSet',
     'BulkPaymentUploadForm', 'BulkDebtUploadForm',
-    'ProfileAddDebtForm', 'InlinePaymentSplitForm',
-    'InlinePaymentSplitFormSet'
-]
+    'ProfileAddDebtForm', 'InternalPaymentSplitFormSet'
+] + base.__all__
 
 
 class EphemeralPaymentForm(ModelForm):
@@ -583,171 +583,7 @@ class BulkDebtUploadForm(CSVUploadForm):
         }
 
 
-class IPSFormPaymentChoiceIterator(forms.models.ModelChoiceIterator):
-    def choice(self, obj):
-        return (
-            self.field.prepare_value(obj),
-            _('%(date)s (total: %(total)s, credit rem.: %(credit)s)') % {
-                'date': timezone.localdate(obj.timestamp),
-                'total': obj.total_amount,
-                'credit': obj.credit_remaining,
-            }
-        )
+class InternalPaymentSplitFormSet(InlineTransactionSplitFormSet):
 
-
-class IPSFormDebtChoiceIterator(forms.models.ModelChoiceIterator):
-    def choice(self, obj):
-        return (
-            self.field.prepare_value(obj),
-            _(
-                '%(comment)s (total: %(total)s, balance: %(balance)s) '
-                '[%(date)s]'
-            ) % {
-                'date': timezone.localdate(obj.timestamp),
-                'balance': obj.balance,
-                'total': obj.total_amount,
-                'comment': obj.comment,
-            }
-        )
-
-
-class InlinePaymentSplitFormSet(forms.BaseInlineFormSet):
-
-    def get_form_kwargs(self, index):
-        kwargs = super().get_form_kwargs(index)
-        kwargs['parent_object'] = self.instance
-
-        # cache this queryset
-        if isinstance(self.instance, models.InternalDebtItem):
-            kwargs['pmt_qs'] = self._admissible_counterpart_queryset
-            kwargs['debt_qs'] = None
-        elif isinstance(self.instance, models.InternalPayment):
-            kwargs['pmt_qs'] = None
-            kwargs['debt_qs'] = self._admissible_counterpart_queryset
-
-        return kwargs
-
-    @cached_property
-    def _admissible_counterpart_queryset(self):
-        if isinstance(self.instance, models.InternalDebtItem):
-            counterpart_id = 'payment_id'
-            base_qs = self.instance.member.payments.with_debts()\
-                .credit_remaining().order_by('-timestamp')
-        elif isinstance(self.instance, models.InternalPayment):
-            counterpart_id = 'debt_id'
-            base_qs = self.instance.member.debts.with_payments()\
-                .unpaid().order_by('-timestamp')
-        else:
-            raise TypeError
-
-        taken_pks = self.instance.splits.all().values_list(
-            counterpart_id, flat=True
-        )
-        return base_qs.exclude(pk__in=taken_pks)
-
-    def clean(self):
-        if any(self.errors):
-            return
-        max_total = self.instance.total_amount
-
-        def split_amounts():
-            for form in self.forms:
-                if form.cleaned_data.get('DELETE'):
-                    continue
-                the_debt = form.cleaned_data.get('debt')
-                the_payment = form.cleaned_data.get('payment')
-                if the_debt and the_payment:
-                    yield form.cleaned_data['amount']
-
-        split_total = sum(
-            split_amounts(),
-            Money(Decimal('0'), settings.BOOKKEEPING_CURRENCY)
-        )
-
-        if split_total > max_total:
-            raise ValidationError(
-                _(
-                    'Splits sum to %(split_total)s. The maximal total for '
-                    'this object is %(max_total)s.'
-                ) % {
-                    'split_total': split_total,
-                    'max_total': max_total
-                }
-            )
-
-
-class InlinePaymentSplitForm(forms.ModelForm):
-
-    class Meta:
-        model = models.InternalPaymentSplit
-        fields = ('payment', 'debt', 'amount')
-        widgets = {
-            'payment': forms.Select(attrs={'style': 'width: 80ch;'}),
-            'debt': forms.Select(attrs={'style': 'width: 80ch;'}),
-        }
-
-    def __init__(self, *args, parent_object=None,
-                 pmt_qs=None, debt_qs=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        # when it matters, we'll be called with proper kwargs
-        # but we need to account for them not being there for when
-        # django's admin tries to detect multipart forms
-        # in it's own cute but utterly retarded way.
-        # That is, by attempting to call the formsets base
-        # formset constructor without arguments and then calling is_multipart
-        # on the form instance. Yes, this completely ignores form_kwargs, which
-        # is stupid
-        self.fields['payment'].iterator = IPSFormPaymentChoiceIterator
-        self.fields['debt'].iterator = IPSFormDebtChoiceIterator
-        self.parent_object = parent_object
-        if self.instance is not None and self.instance.pk is not None:
-            self.fields['payment'].disabled = True
-            self.fields['payment'].widget.choices = [
-                IPSFormPaymentChoiceIterator(self.fields['payment']).choice(
-                    self.instance.payment
-                )
-            ]
-            self.fields['debt'].disabled = True
-            self.fields['debt'].widget.choices = [
-                IPSFormDebtChoiceIterator(self.fields['debt']).choice(
-                    self.instance.debt
-                )
-            ]
-        elif parent_object is not None:
-            # yes, this can be none, but see above
-            self.fields['payment'].queryset = pmt_qs
-            self.fields['debt'].queryset = debt_qs
-
-    def clean(self):
-        super().clean()
-        if not self.has_changed():
-            return
-        amount = self.cleaned_data.get('amount')
-        if not amount:
-            return
-        if isinstance(self.parent_object, models.InternalDebtItem):
-            pmt = self.cleaned_data['payment']
-            if pmt.credit_remaining < amount:
-                raise ValidationError(
-                    _(
-                        'That payment does not have enough funds left: '
-                        'requested %(amount)s, but only %(credit)s available.'
-                    ) % {
-                        'amount': amount,
-                        'credit': pmt.credit_remaining
-                    }
-                )
-        elif isinstance(self.parent_object, models.InternalPayment):
-            debt = self.cleaned_data['debt']
-            if debt.balance < amount:
-                raise ValidationError(
-                    _(
-                        'The balance of the selected debt is lower than the '
-                        'amount supplied: '
-                        'balance is %(balance)s, but attempted to credit '
-                        '%(amount)s.'
-                    ) % {
-                        'amount': amount,
-                        'balance': debt.balance
-                    }
-                )
+    def base_filter(self):
+        return Q(member=self.instance.member)

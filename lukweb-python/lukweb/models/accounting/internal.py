@@ -75,6 +75,7 @@ class IDIQuerySet(accounting_base.BaseDebtQuerySet):
 
 
 class InternalDebtItem(accounting_base.BaseDebtRecord):
+
     member = ChoirMemberField(
         on_delete=models.PROTECT,
         verbose_name=_('involved member'),
@@ -100,7 +101,6 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
         blank=True
     )
 
-
     # TODO: we should enforce participation_allowed on object creation
     # in the admin. This is not completely trivial
     activity_participation = models.ForeignKey(
@@ -118,6 +118,13 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
     )
 
     objects = IDIQuerySet.as_manager()
+
+    insufficient_unmatched_balance_error = _(
+        'The balance of the selected debt is lower than the '
+        'amount supplied: '
+        'balance is %(balance)s, but attempted to credit '
+        '%(amount)s.'
+    )
 
     class Meta:
         verbose_name = _('internal debt')
@@ -161,6 +168,17 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
             return_val = "WEBSITE ERROR: NO MEMO FOUND"
         return return_val
 
+    def form_select_str(self):
+        return _(
+            '%(comment)s (total: %(total)s, balance: %(balance)s) '
+            '[%(date)s]'
+        ) % {
+            'date': timezone.localdate(self.timestamp),
+            'balance': self.balance,
+            'total': self.total_amount,
+            'comment': self.comment,
+        }
+
     def __str__(self):
         if self.comment:
             return '[%s]<%s>:%s' % (
@@ -203,6 +221,11 @@ class InternalPayment(accounting_base.BasePaymentRecord):
         choices=PAYMENT_NATURE_CHOICES
     )
 
+    insufficient_unmatched_balance_error = _(
+        'That payment does not have enough funds left: '
+        'requested %(amount)s, but only %(balance)s available.'
+    )
+
     class Meta:
         verbose_name = _('internal payment')
         verbose_name_plural = _('internal payments')
@@ -212,6 +235,13 @@ class InternalPayment(accounting_base.BasePaymentRecord):
         if not self.timestamp:
             self.timestamp = self.processed
         return super(InternalPayment, self).save(**kwargs)
+
+    def form_select_str(self):
+        return _('%(date)s (total: %(total)s, credit rem.: %(credit)s)') % {
+            'date': timezone.localdate(self.timestamp),
+            'total': self.total_amount,
+            'credit': self.credit_remaining,
+        }
 
     def __str__(self):
         return '%s (%s)' % (self.total_amount, self.member)

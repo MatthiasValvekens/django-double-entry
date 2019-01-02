@@ -14,7 +14,6 @@ from django.utils.translation import (
     ugettext_lazy as _, pgettext_lazy,
 )
 from djmoney.models.fields import MoneyField
-from djmoney.money import Money
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
 
@@ -39,6 +38,15 @@ def nonzero_money_validator(money):
 
 
 class DoubleBookModel(models.Model):
+    
+    # This error message is vague, so subclasses should override it with
+    # something that makes more sense.
+    insufficient_unmatched_balance_error = _(
+        'This account does not have enough unmatched balance to '
+        'apply the requested split: unmatched balance is %(balance)s, '
+        'but attempted to match %(amount)s.'
+    )
+
     _split_manager_name = None
     _split_model = None
     _remote_target_field = None
@@ -183,6 +191,10 @@ class DoubleBookModel(models.Model):
         # it might have rounding errors (and it's intended for filtering
         # anyway)
         return not self.unmatched_balance
+
+    # string value that will be used in select fields in admin forms
+    def form_select_str(self):
+        return str(self)
 
 
 class BaseFinancialRecord(DoubleBookModel):
@@ -356,8 +368,10 @@ class BaseTransactionSplit(models.Model):
 
     @classmethod
     def get_double_book_models(cls):
-        return {
+        res = {
             f.name: f.related_model for f in cls._meta.get_fields()
             if isinstance(f, models.ForeignKey) 
             and issubclass(f.related_model, DoubleBookModel)
         }
+        assert len(res) == 2
+        return res
