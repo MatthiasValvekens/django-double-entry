@@ -152,7 +152,7 @@ class DoubleBookModel(models.Model):
             return decimal_to_money(
                 getattr(self, DoubleBookQuerySet.MATCHED_BALANCE_FIELD)
             )
-        except AttributeError as e:
+        except AttributeError:
             # a record that is not in the DB yet is by definition 
             # completely unmatched
             if self.pk is None:
@@ -163,6 +163,8 @@ class DoubleBookModel(models.Model):
                 'for matched_balance computation. '
                 'Please review queryset usage.'
             )
+            import traceback
+            logger.debug(''.join(traceback.format_stack()))
             splits = self.split_manager
             return decimal_to_money(
                 splits.aggregate(

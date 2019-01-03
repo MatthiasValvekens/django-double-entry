@@ -586,4 +586,11 @@ class BulkDebtUploadForm(CSVUploadForm):
 class InternalPaymentSplitFormSet(InlineTransactionSplitFormSet):
 
     def base_filter(self):
-        return Q(member=self.instance.member)
+        qs = Q(member=self.instance.member)
+        if isinstance(self.instance, models.InternalDebtItem):
+            qs &= Q(timestamp__gte=self.instance.timestamp)
+        elif isinstance(self.instance, models.InternalPayment):
+            qs &= Q(timestamp__lte=self.instance.timestamp)
+        else:
+            raise TypeError
+        return qs

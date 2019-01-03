@@ -271,9 +271,20 @@ class InternalPaymentSplit(accounting_base.BaseTransactionSplit):
 
     def clean(self):
         try:
+            if self.payment.member_id != self.debt.member_id:
+                raise ValidationError(
+                    _('Payment and debt must belong to the same member.')
+                )
             if self.payment.timestamp < self.debt.timestamp:
                 raise ValidationError(
-                    _('Payment cannot be applied to future debt.')
+                    _(
+                        'Payment cannot be applied to future debt. '
+                        'Payment is dated %(payment_ts)s, while '
+                        'debt is dated %(debt_ts)s.'
+                    ) % {
+                        'payment_ts': self.payment.timestamp,
+                        'debt_ts': self.debt.timestamp
+                    }
                 )
         except (
             InternalPayment.DoesNotExist, InternalDebtItem.DoesNotExist

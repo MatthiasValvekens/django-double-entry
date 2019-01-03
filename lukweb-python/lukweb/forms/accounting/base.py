@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from django import forms
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.forms import ValidationError
 from django.utils.functional import cached_property
@@ -126,16 +127,20 @@ class BaseInlineTransactionSplitForm(forms.ModelForm):
             if self.instance is not None and self.instance.pk is not None:
                 # pin choices to current value and disable field
                 for col in columns:
-                    self.fields[col].disabled = True
-                    self.fields[col].widget.choices = [
-                        ITSFormChoiceIterator(self.fields[col]).choice(
-                            getattr(self.instance, col)
-                        )
+                    field = self.fields[col]
+                    field_value = getattr(self.instance, col)
+                    remote_manager = field_value.__class__._default_manager
+                    # TODO: There has to be a better way to do this
+                    field.queryset = remote_manager.filter(pk=field_value.pk)
+                    field.disabled = True
+                    field.widget.choices = [
+                        ITSFormChoiceIterator(field).choice(field_value)
                     ]
 
     def clean(self):
-        super().clean()
-        if not self.has_changed():
+        with transaction.atomic():
+            super().clean()
+        if not self.has_changed() or self.cleaned_data.get('DELETE'):
             return
         amount = self.cleaned_data.get('amount')
         if not amount:
