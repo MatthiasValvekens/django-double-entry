@@ -276,14 +276,18 @@ class InternalPaymentSplit(accounting_base.BaseTransactionSplit):
                     _('Payment and debt must belong to the same member.')
                 )
             if self.payment.timestamp < self.debt.timestamp:
+                def loctimefmt(ts):
+                    return timezone.localtime(ts).strftime(
+                        '%Y-%m-%d %H:%M:%S'
+                    )
                 raise ValidationError(
                     _(
                         'Payment cannot be applied to future debt. '
                         'Payment is dated %(payment_ts)s, while '
                         'debt is dated %(debt_ts)s.'
                     ) % {
-                        'payment_ts': self.payment.timestamp,
-                        'debt_ts': self.debt.timestamp
+                        'payment_ts': loctimefmt(self.payment.timestamp),
+                        'debt_ts': loctimefmt(self.debt.timestamp)
                     }
                 )
         except (
