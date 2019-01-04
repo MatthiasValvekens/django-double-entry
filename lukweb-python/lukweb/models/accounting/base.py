@@ -249,10 +249,11 @@ class DoubleBookQuerySet(models.QuerySet):
             return self
         # joins don't work for multiple annotations, so 
         # we have to use a subquery
+        total_amount_field_name = self.model.TOTAL_AMOUNT_FIELD_NAME
         return self.annotate(**{
             cls.MATCHED_BALANCE_FIELD: self._split_sum_subquery(),
             cls.UNMATCHED_BALANCE_FIELD: ExpressionWrapper(
-                F(self.model.TOTAL_AMOUNT_FIELD) - F(cls.MATCHED_BALANCE_FIELD),
+                F(total_amount_field_name) - F(cls.MATCHED_BALANCE_FIELD),
                 output_field=models.DecimalField()
             ),
             # For some extremely bizarre reason,
@@ -268,7 +269,7 @@ class DoubleBookQuerySet(models.QuerySet):
             # TODO: write said rounding function
             cls.FULLY_MATCHED_FIELD: Case(
                 When(**{
-                    self.model.TOTAL_AMOUNT_FIELD + '__lte':
+                    total_amount_field_name + '__lte':
                         F(cls.MATCHED_BALANCE_FIELD),
                     'then': Value(True)
                 }),
