@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from decimal import Decimal
 
 from django.db import models
@@ -65,13 +66,15 @@ class IDIQuerySet(accounting_base.BaseDebtQuerySet):
             qs = qs.filter(filter_slug__in=filter_slugs)
         qs = qs.annotate(
             total_balance=Coalesce(
-                Sum(IDIQuerySet.UNMATCHED_BALANCE_FIELD), Value(Decimal('0.00')),
+                Sum(IDIQuerySet.UNMATCHED_BALANCE_FIELD), 
+                Value(Decimal('0.00')),
             )
         )
-        return {
+        zero_money = payments.decimal_to_money(Decimal('0.00'))
+        return defaultdict(lambda: zero_money, {
             slug: payments.decimal_to_money(v) for slug, v in qs
             if not skip_zeroes or v
-        }
+        })
 
 
 class InternalDebtItem(accounting_base.BaseDebtRecord):
