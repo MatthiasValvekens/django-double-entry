@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from decimal import Decimal
 from itertools import chain
@@ -9,15 +10,74 @@ from django.utils.translation import (
 from djmoney.money import Money
 
 from ... import payments, models
-from ...payments import _dt_fallback
 from . import internal, ticketing
+from .bulk_utils import PaymentCSVParser
 from ..utils import ParserErrorMixin
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['ElectronicPaymentPopulator',]
+__all__ = [
+    'ElectronicPaymentPopulator', 'BankCSVParser'
+]
 
+
+# TODO: implement KBC parser
+# TODO: implement parser switching in globals
+# TODO: clearly document parsers
+# TODO: delimiter autodetection
+
+class BankCSVParser(PaymentCSVParser):
+    
+    class TransactionInfo(PaymentCSVParser.TransactionInfo): 
+        def __init__(self, *, ogm, **kwargs):
+            super().__init__(**kwargs)
+            self.ogm = ogm
+
+    def get_nature(self, line_no, row):
+        return payments.PAYMENT_NATURE_TRANSFER
+
+    def get_ogm(self, line_no, row):
+        raise NotImplementedError
+
+    def parse_row_to_dict(self, line_no, row):
+        parsed = super().parse_row_to_dict(line_no, row)
+        ogm = self.get_ogm(line_no, row)
+        if ogm is None:
+            return None
+        parsed['ogm'] = ogm
+        return parsed
+
+# lookbehind doesn't work, since we don't want to constrain the
+# prefix to a fixed length
+FORTIS_FIND_OGM = r'MEDEDELING\s*:\s+' + payments.OGM_REGEX
+FORTIS_SEARCH_PATTERN = re.compile(FORTIS_FIND_OGM)
+
+class FortisCSVParser(BankCSVParser):
+    delimiter = ';'
+
+    # TODO: force all relevant columns to be present here
+    amount_column_name = 'Bedrag'
+    date_column_name = 'Uitvoeringsdatum'
+
+    def get_ogm(self, line_no, row):
+        m = FORTIS_SEARCH_PATTERN.search(row['Details'])
+        if m is None:
+            return None
+        ogm_str = m.group(0)
+        try:
+            prefix, modulus = payments.parse_ogm(ogm_str, match=m)
+        except (ValueError, TypeError):
+            self.error(
+                line_no, 
+                _('Illegal OGM string %(ogm)s.') % {
+                    'ogm': ogm_str
+                }
+            )
+            return None
+
+        ogm_canonical = payments.ogm_from_prefix(prefix)
+        return ogm_canonical
 
 class ElectronicPaymentPopulator(ParserErrorMixin):
     DEBT_TRANSFER_PREFIX = 'bulk-debt-transfers'
@@ -91,7 +151,7 @@ class ElectronicPaymentPopulator(ParserErrorMixin):
                         'ogm': tinfo.ogm,
                         'name': member.full_name,
                         'total_amount': tinfo.amount,
-                        'timestamp': _dt_fallback(tinfo.timestamp)
+                        'timestamp': tinfo.timestamp
                     }
 
             # save to debt_contributions

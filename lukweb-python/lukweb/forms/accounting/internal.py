@@ -5,6 +5,7 @@ from decimal import Decimal
 from itertools import chain
 
 from django import forms
+from django.utils.text import slugify
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.db.models import Q
@@ -16,11 +17,11 @@ from django.utils.translation import (
 from djmoney.money import Money
 
 from . import base
+from .bulk_utils import MemberTransactionParser, PaymentCSVParser
 from .base import *
 from .utils import GnuCashFieldMixin
 from ..utils import ParserErrorMixin, CSVUploadForm
 from ... import payments, models
-from ...payments import _dt_fallback
 from ...widgets import (
     DatalistInputWidget, MoneyWidget,
 )
@@ -231,7 +232,7 @@ class MiscDebtPaymentPopulator(FetchMembersMixin):
                         'member_id': member.pk,
                         'name': member.full_name,
                         'total_amount': tinfo.amount,
-                        'timestamp': _dt_fallback(tinfo.timestamp),
+                        'timestamp': tinfo.timestamp,
                         'debt_filter': tinfo.debt_filter
                     }
 
@@ -310,7 +311,7 @@ class AddDebtFormsetPopulator(FetchMembersMixin):
                     'gnucash': dinfo.gnucash,
                     'comment': dinfo.comment,
                     'filter_slug': dinfo.filter_slug,
-                    'timestamp': _dt_fallback(dinfo.timestamp)
+                    'timestamp':dinfo.timestamp
                 }
 
         initial_data = list(chain(*map(make_initials, member_list)))
@@ -467,8 +468,8 @@ def bucket_transaction_history(nature, trans_data):
     historical_buckets = defaultdict(int)
     if not trans_data:
         return historical_buckets
-    min_date = _dt_fallback(min(map(extr_date, trans_data)))
-    max_date = _dt_fallback(max(map(extr_date, trans_data)))
+    min_date = payments._dt_fallback(min(map(extr_date, trans_data)))
+    max_date = payments._dt_fallback(max(map(extr_date, trans_data)))
     payment_history = models.InternalPayment.objects.filter(
         nature=nature,
         timestamp__gte=min_date,
@@ -534,6 +535,51 @@ def do_dupcheck(errf, member, historical_buckets, dupcheck):
             )
 
 
+class MiscDebtPaymentCSVParser(PaymentCSVParser, MemberTransactionParser):
+    delimiter = ';'
+    nature_column_name = 'aard'
+    filter_column_name = 'filter'
+
+    class TransactionInfo(PaymentCSVParser.TransactionInfo, 
+                          MemberTransactionParser.TransactionInfo):
+        def __init__(self, *, debt_filter=None, **kwargs):
+            super().__init__(**kwargs)
+            self.debt_filter = debt_filter
+
+    def get_nature(self, line_no, row): 
+        nature = row.get(self.nature_column_name, payments.PAYMENT_NATURE_CASH)
+        if nature in ('bank', 'overschrijving'):
+            nature = payments.PAYMENT_NATURE_TRANSFER
+        else:
+            nature = payments.PAYMENT_NATURE_CASH
+        return nature
+
+    # required columns: lid, bedrag
+    # optional columns: datum, aard, filter
+    # filter column requires a value if supplied!
+    def parse_row_to_dict(self, line_no, row):
+        parsed = super().parse_row_to_dict(line_no, row)
+        try:
+            debt_filter = slugify(row[self.filter_column_name])
+            if not debt_filter:
+                self.error(
+                    line_no, _(
+                        'You must supply a filter value for all payments in '
+                        '\'Misc. internal debt payments\', or omit the '
+                        '\'%(colname)s\' column entirely. '
+                        'Skipped processing.'
+                    ) % {'colname': self.filter_column_name}
+                )
+                return None
+            else:
+                parsed['debt_filter'] = debt_filter
+        except KeyError:
+            # proceed as normal
+            pass
+
+        return parsed
+
+
 class BulkPaymentUploadForm(CSVUploadForm):
 
     transfer_csv = forms.FileField(
@@ -557,13 +603,36 @@ class BulkPaymentUploadForm(CSVUploadForm):
 
     @property
     def csv_parser_classes(self):
+        from .transfers import FortisCSVParser
         # TODO: make parser configurable in globals
         # (this is why I don't want to override FileField:
         #   we'd have to override it again to make this property dynamic)
         return {
-            'transfer_csv': payments.FortisCSVParser,
-            'misc_debt_csv': payments.MiscDebtPaymentCSVParser
+            'transfer_csv': FortisCSVParser,
+            'misc_debt_csv': MiscDebtPaymentCSVParser
         }
+
+
+class DebtCSVParser(MemberTransactionParser):
+    delimiter = ';'
+
+    comment_column_name = 'mededeling'
+    gnucash_column_name = 'gnucash'
+
+    class TransactionInfo(MemberTransactionParser.TransactionInfo): 
+        def __init__(self, *, comment, gnucash, filter_slug, **kwargs):
+            super().__init__(**kwargs)
+            self.comment = comment
+            self.gnucash = gnucash
+            self.filter_slug = filter_slug
+
+    def parse_row_to_dict(self, line_no, row):
+        parsed = super().parse_row_to_dict(line_no, row)
+        parsed['comment'] = row[self.comment_column_name]
+        parsed['gnucash'] = row[self.gnucash_column_name]
+        # coerce falsy values
+        parsed['filter_slug'] = slugify(row.get('filter', '')) or None
+        return parsed
 
 
 class BulkDebtUploadForm(CSVUploadForm):
@@ -579,7 +648,7 @@ class BulkDebtUploadForm(CSVUploadForm):
     @property
     def csv_parser_classes(self):
         return {
-            'debt_csv': payments.DebtCSVParser
+            'debt_csv': DebtCSVParser
         }
 
 
