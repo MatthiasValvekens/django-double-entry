@@ -38,7 +38,9 @@ def nonzero_money_validator(money):
 
 
 class DoubleBookModel(models.Model):
-    
+
+    TOTAL_AMOUNT_FIELD_NAME = 'total_amount'
+
     # This error message is vague, so subclasses should override it with
     # something that makes more sense.
     insufficient_unmatched_balance_error = _(
@@ -181,11 +183,8 @@ class DoubleBookModel(models.Model):
                 getattr(self, DoubleBookQuerySet.UNMATCHED_BALANCE_FIELD)
             )
         except AttributeError:
-            # total_amount needs to be a valid attribute, but it doesn't make
-            # sense to define it as None at the class level,
-            # since it might be supplied by an annotation.
-            # (TODO: is this necessarily a problem?)
-            return self.total_amount - self.matched_balance
+            total_amount = getattr(self, self.TOTAL_AMOUNT_FIELD_NAME)
+            return  total_amount - self.matched_balance
 
     @cached_property
     def fully_matched(self):
@@ -222,7 +221,6 @@ class DoubleBookQuerySet(models.QuerySet):
     MATCHED_BALANCE_FIELD = 'matched_balance_fromdb'
     UNMATCHED_BALANCE_FIELD = 'unmatched_balance_fromdb' 
     FULLY_MATCHED_FIELD = 'fully_matched_fromdb'
-    TOTAL_AMOUNT_FIELD = 'total_amount'
 
     def _split_sum_subquery(self):
         """
@@ -254,7 +252,7 @@ class DoubleBookQuerySet(models.QuerySet):
         return self.annotate(**{
             cls.MATCHED_BALANCE_FIELD: self._split_sum_subquery(),
             cls.UNMATCHED_BALANCE_FIELD: ExpressionWrapper(
-                F(cls.TOTAL_AMOUNT_FIELD) - F(cls.MATCHED_BALANCE_FIELD),
+                F(self.model.TOTAL_AMOUNT_FIELD) - F(cls.MATCHED_BALANCE_FIELD),
                 output_field=models.DecimalField()
             ),
             # For some extremely bizarre reason,
@@ -269,10 +267,11 @@ class DoubleBookQuerySet(models.QuerySet):
             # that in a database-agnostic way)
             # TODO: write said rounding function
             cls.FULLY_MATCHED_FIELD: Case(
-                When(
-                    total_amount__lte=F(cls.MATCHED_BALANCE_FIELD), 
-                    then=Value(True)
-                ),
+                When(**{
+                    self.model.TOTAL_AMOUNT_FIELD + '__lte':
+                        F(cls.MATCHED_BALANCE_FIELD),
+                    'then': Value(True)
+                }),
                 default=Value(False),
                 output_field=models.BooleanField()
             )
