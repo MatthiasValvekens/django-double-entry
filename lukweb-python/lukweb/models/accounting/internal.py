@@ -259,7 +259,7 @@ class InternalPayment(accounting_base.BasePaymentRecord,
         return '%s (%s)' % (self.total_amount, self.member)
 
 
-class InternalPaymentSplit(accounting_base.BaseTransactionSplit):
+class InternalPaymentSplit(accounting_base.BaseDebtPaymentSplit):
     payment = models.ForeignKey(
         InternalPayment,
         on_delete=models.CASCADE,
@@ -282,27 +282,8 @@ class InternalPaymentSplit(accounting_base.BaseTransactionSplit):
     # TODO: sane __str__
 
     def clean(self):
-        try:
-            if self.payment.member_id != self.debt.member_id:
-                raise ValidationError(
-                    _('Payment and debt must belong to the same member.')
-                )
-            if self.payment.timestamp < self.debt.timestamp:
-                def loctimefmt(ts):
-                    return timezone.localtime(ts).strftime(
-                        '%Y-%m-%d %H:%M:%S'
-                    )
-                raise ValidationError(
-                    _(
-                        'Payment cannot be applied to future debt. '
-                        'Payment is dated %(payment_ts)s, while '
-                        'debt is dated %(debt_ts)s.'
-                    ) % {
-                        'payment_ts': loctimefmt(self.payment.timestamp),
-                        'debt_ts': loctimefmt(self.debt.timestamp)
-                    }
-                )
-        except (
-            InternalPayment.DoesNotExist, InternalDebtItem.DoesNotExist
-        ):
-            pass
+        super().clean()
+        if self.payment.member_id != self.debt.member_id:
+            raise ValidationError(
+                _('Payment and debt must belong to the same member.')
+            )

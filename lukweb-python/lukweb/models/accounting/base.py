@@ -254,6 +254,14 @@ class BaseFinancialRecord(DoubleBookModel):
     class Meta:
         abstract = True
 
+    def clean(self): 
+        if self.total_amount.amount < 0:
+            raise ValidationError(
+                _('Ledger entry amount is negative: %(amount)s') % {
+                    'amount': self.total_amount
+                }
+            )
+
 
 # Conventions: 
 #  matched balance: sum of all splits
@@ -451,3 +459,71 @@ class BaseTransactionSplit(models.Model):
         }
         assert len(res) == 2
         return res
+
+    def clean(self):
+        if self.amount.amount < 0:
+            raise ValidationError(
+                _('Split amount is negative: %(amount)s') % {
+                    'amount': self.amount
+                }
+            )
+
+
+class BaseDebtPaymentSplit(BaseTransactionSplit):
+    _pmt_column_name = None
+    _debt_column_name = None
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def get_payment_column(cls):
+        if cls._pmt_column_name is None:
+            res = [
+                f.name for f in cls._meta.get_fields()
+                if isinstance(f, models.ForeignKey) 
+                and issubclass(f.related_model, BasePaymentRecord)
+            ]
+            if len(res) == 0:
+                raise TypeError('No payment column present.')
+            elif len(res) == 2:
+                raise TypeError('Multiple payment columns present.')
+            cls._pmt_column_name = res[0]
+        return cls._pmt_column_name
+
+    @classmethod
+    def get_debt_column(cls):
+        if cls._debt_column_name is None:
+            res = [
+                f.name for f in cls._meta.get_fields()
+                if isinstance(f, models.ForeignKey) 
+                and issubclass(f.related_model, BaseDebtRecord)
+            ]
+            if len(res) == 0:
+                raise TypeError('No debt column present.')
+            elif len(res) == 2:
+                raise TypeError('Multiple debt columns present.')
+            cls._debt_column_name = res[0]
+        return cls._debt_column_name
+    
+    def clean(self):
+        super().clean()
+        cls = self.__class__
+        payment = getattr(self, cls.get_payment_column())
+        debt = getattr(self, cls.get_debt_column())
+
+        if payment.timestamp < debt.timestamp:
+            def loctimefmt(ts):
+                return timezone.localtime(ts).strftime(
+                    '%Y-%m-%d %H:%M:%S'
+                )
+            raise ValidationError(
+                _(
+                    'Payment cannot be applied to future debt. '
+                    'Payment is dated %(payment_ts)s, while '
+                    'debt is dated %(debt_ts)s.'
+                ) % {
+                    'payment_ts': loctimefmt(payment.timestamp),
+                    'debt_ts': loctimefmt(debt.timestamp)
+                }
+            )
