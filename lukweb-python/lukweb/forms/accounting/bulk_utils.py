@@ -1,6 +1,7 @@
 import datetime
 from csv import DictReader
 from decimal import Decimal, DecimalException
+from collections import defaultdict
 
 from django.conf import settings
 from django.utils import timezone
@@ -177,7 +178,8 @@ class PaymentCSVParser(FinancialCSVParser):
 
 class LedgerEntryPreparator(ParserErrorMixin):
     model = None 
-    formset = None
+    formset_class = None
+    formset_prefix = None
     _valid_transactions = None
 
     def __init__(self, parser):
@@ -238,3 +240,104 @@ class LedgerEntryPreparator(ParserErrorMixin):
             'total_amount': transaction.amount,
             'timestamp': transaction.timestamp
         }
+
+    @cached_property
+    def formset(self):
+        initial_data = [
+            self.form_kwargs_for_transaction(t)
+            for t in self.valid_transactions
+        ]
+        fs = self.formset_class(
+            queryset=self.model._default_manager.none(),
+            initial=initial_data,
+            prefix=self.formset_prefix
+        )
+        fs.extra = len(initial_data)
+        return fs
+
+
+class FetchMembersMixin(LedgerEntryPreparator):
+
+    transactions_by_member_id = None
+    members_by_str = None
+
+    def unknown_member(self, member_str, line_nos):
+        msg = _(
+            '%(member_str)s does not designate a registered member.'
+        )
+
+        self.error_at_lines(
+            line_nos, msg, params={'member_str': member_str}
+        )
+
+    def prepare(self): 
+        # split the transaction list into email and name indices
+        email_index, name_index = defaultdict(list), defaultdict(list)
+        for info in self.transactions:
+            use_email = '@' in info.member_str
+            targ = email_index if use_email else name_index
+            key = info.member_str if use_email else info.member_str.casefold()
+            targ[key].append(info)
+
+        member_email_qs, unseen = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().by_emails(
+                email_index.keys(), validate_unseen=True
+            )
+
+        for email in unseen:
+            ts = email_index[email]
+            self.unknown_member(email, [t.line_no for t in ts])
+
+        # TODO Restrict to active members only, maybe?
+        member_name_qs, unseen, duplicates = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().by_full_names(
+                name_index.keys(), validate_unseen=True, validate_nodups=True
+            )
+
+        for name in unseen:
+            ts = name_index[name.casefold()]
+            self.unknown_member(name, [t.line_no for t in ts])
+
+        for name in duplicates:
+            ts = name_index[name.casefold()]
+            msg = _(
+                '%(member_str)s designates multiple registered members. '
+                'Skipped processing.',
+            )
+            self.error_at_lines(
+                [t.line_no for t in ts], msg, params={'member_str': name},
+            )
+
+        transactions_by_member_id = defaultdict(list)
+        members_by_str = dict()
+
+        for m in member_email_qs:
+            member_str = m.user.email
+            members_by_str[member_str] = m
+            transactions_by_member_id[m.pk] = email_index[member_str]
+
+        for m in member_name_qs:
+            member_str = m.full_name
+            imember_str = member_str.casefold()
+            if imember_str not in duplicates:
+                members_by_str[member_str] = m
+                transactions_by_member_id[m.pk] = name_index[imember_str]
+
+    def form_kwargs_for_transaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        member = transaction.ledger_entry.member
+        kwargs['member_id'] = member.pk
+        kwargs['name'] = member.full_name
+        kwargs['email'] = member.user.email
+        return kwargs
+    
+    def model_kwargs_for_transaction(self, transaction):
+        kwargs = super().model_kwargs_for_transaction(transaction)
+        try:
+            member = self.members_by_str[transaction.member_str]
+            kwargs['member'] = member
+            return kwargs
+        except KeyError: 
+            # member search errors have already been logged
+            # in the preparation step, so we don't care
+            return kwargs
