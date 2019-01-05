@@ -258,6 +258,7 @@ class LedgerEntryPreparator(ParserErrorMixin):
 
 class FetchMembersMixin(LedgerEntryPreparator):
 
+    # TODO: is this still necessary to keep around?
     transactions_by_member_id = None
     members_by_str = None
 
@@ -341,3 +342,61 @@ class FetchMembersMixin(LedgerEntryPreparator):
             # member search errors have already been logged
             # in the preparation step, so we don't care
             return kwargs
+
+
+class DuplicationProtectedPreparator(LedgerEntryPreparator):
+    single_dup_message = None
+    multiple_dup_message = None
+
+    def validate_global(self, valid_transactions):
+        valid_transactions = super().validate_global(valid_transactions)
+        dates = [
+            timezone.localdate(t.timestamp) for t in valid_transactions
+        ]
+
+        historical_buckets = self.model._default_manager.dupcheck_buckets(
+            date_bounds=(min(dates), max(dates))
+        )
+
+        import_buckets = defaultdict(list)
+        for transaction in valid_transactions:
+            sig = transaction.ledger_entry.dupcheck_signature
+            import_buckets[sig].append(transaction)
+
+        def strip_duplicates():
+            for sig, transactions in import_buckets.items():
+                occ_in_import = len(transactions)
+                occ_in_hist = historical_buckets[sig]
+                dupcount = min(occ_in_hist, occ_in_import)
+                if occ_in_hist:
+                    # signal duplicate with an error message
+                    params = dup_error_params(sig)
+                    params['hist'] = occ_in_hist
+                    params['import'] = occ_in_import
+                    params['dupcount'] = dupcount
+
+                    # special case, this is the most likely one to occur
+                    # so deserves special wording
+                    if occ_in_hist == occ_in_import == 1:
+                        msg_fmt_str = self.single_dup_message
+                    else:
+                        msg_fmt_str = self.multiple_dup_message
+                    # report duplicate error
+                    self.error_at_lines(
+                        [t.line_no for t in transactions],
+                        msg_fmt_str,
+                        params=params
+                    )
+                # skip the first dupcount entries, we treat those as the 
+                # duplicate ones. The others will be entered into the db
+                # as usual
+                yield from transactions[dupcount:]
+
+        return list(strip_duplicates())
+                
+
+    def dup_error_params(self, signature_used):
+        return {
+            'date': signature_used[0],
+            'amount': signature_used[1],
+        }

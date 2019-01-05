@@ -18,7 +18,8 @@ from djmoney.models.fields import MoneyField
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
 
-from ...payments import decimal_to_money, _dt_fallback
+from ...payments import decimal_to_money
+from ...utils import _dt_fallback
 
 __all__ = [
     'DoubleBookModel', 'BaseFinancialRecord', 'BaseDebtRecord',
@@ -342,10 +343,17 @@ class DuplicationProtectedQuerySet(DoubleBookQuerySet):
             )
         historical_buckets = defaultdict(int)
         if date_bounds is not None:
-            min_date, max_date = map(_dt_fallback, date_bounds)
+            # replace min/max timestamps by min/max time on the same day
+            # (in the local timezone) and filter
+            min_date, max_date = date_bounds
+            if isinstance(min_date, datetime.datetime):
+                min_date = timezone.localdate(min_date)
+            if isinstance(max_date, datetime.datetime):
+                max_date = timezone.localdate(max_date)
+            # assume that we have a raw date pair now
             qs = self.filter(
-                timestamp__gte=min_date,
-                timestamp__lte=max_date
+                timestamp__gte=_dt_fallback(min_date),
+                timestamp__lte=_dt_fallback(max_date, use_max=True)
             )
         else:
             qs = self
