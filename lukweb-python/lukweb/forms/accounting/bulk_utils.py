@@ -196,7 +196,14 @@ class LedgerEntryPreparator(ParserErrorMixin):
         fmtd_msg = msg % (params or {})
         self._errors.insert(0, (sorted(line_nos), fmtd_msg))
 
+    # The prepare/review methods are called before
+    # and after transaction validation, respectively.
+    # The review method can access and use
+    # self.valid_transactions.
     def prepare(self):
+        return
+
+    def review(self):
         return
 
     def model_kwargs_for_transaction(self, transaction):
@@ -219,7 +226,7 @@ class LedgerEntryPreparator(ParserErrorMixin):
         # ledger_entry property set to something meaningful
         return valid_transactions
 
-    @cached_property
+    @property
     def valid_transactions(self): 
         if self._valid_transactions is None:
             self.prepare()
@@ -234,6 +241,8 @@ class LedgerEntryPreparator(ParserErrorMixin):
                 t for transaction in self.transactions if valid(t)
             ]
             self._valid_transactions = validate_global(indiv_transactions)
+            self.review()
+        return self._valid_transactions
 
     def form_kwargs_for_transaction(self, transaction):
         return {
@@ -272,6 +281,7 @@ class FetchMembersMixin(LedgerEntryPreparator):
         )
 
     def prepare(self): 
+        super().prepare()
         # split the transaction list into email and name indices
         email_index, name_index = defaultdict(list), defaultdict(list)
         for info in self.transactions:
@@ -400,3 +410,62 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
             'date': signature_used[0],
             'amount': signature_used[1],
         }
+
+
+class CreditApportionmentMixin(LedgerEntryPreparator):
+    split_model = None
+    overpayment_fmt_string = None
+
+    # optional, can be derived through reflection
+    payment_fk_name = None
+    debt_fk_name = None
+    _debt_buckets = None
+
+    def debt_buckets(self):
+        raise NotImplementedError
+
+    def transactions_for(self, debt_key):
+        raise NotImplementedError
+
+    def make_splits(self, payments, debts):
+        from ...payments import make_payment_splits
+        return make_payment_splits(
+            payments, debts, self.split_model, 
+            payment_fk_name=self.payment_fk_name,
+            debt_fk_name=self.debt_fk_name
+        )
+
+    def review(self):
+        super().review()
+        # compute the total credit used vs the total
+        # credit established, and notify the treasurer
+        self._debt_buckets = self.debt_buckets()
+        for key, debts in self._debt_buckets.items():
+            transactions = self.transactions_for(debt_key) 
+            payments = [
+                t.ledger_entry for t in transactions
+            ]
+            splits = self.make_splits(payments, debts)
+            total_used = sum(
+                (s.amount for s in splits),
+                Money(0, settings.BOOKKEEPING_CURRENCY)
+            )
+            total_credit = sum(
+                (p.total_amount for p in payments),
+                Money(0, settings.BOOKKEEPING_CURRENCY)
+            )
+            if total_used < total_credit:
+                self.error(
+                    [t.line_no for t in transactions],
+                    self.overpayment_fmt_string,
+                    params={
+                        'key': key,
+                        'total_used': total_used,
+                        'total_credit': total_credit
+                    }
+                )
+                # TODO: figure out how to deal with refunds here
+                # I'm convinced again that having a to_refund account in gnucash
+                # is the best way to deal with this, but we need to
+                # have a qif_excluded field on payments in case the treasurer
+                # wants to deal with these things manually
