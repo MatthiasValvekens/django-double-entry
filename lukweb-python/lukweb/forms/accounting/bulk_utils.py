@@ -4,12 +4,14 @@ from decimal import Decimal, DecimalException
 
 from django.conf import settings
 from django.utils import timezone
+from django.utils.functional import cached_property
 from django.utils.translation import (
     ugettext_lazy as _,
 )
 from djmoney.money import Money
 
 from ...utils import _dt_fallback
+from ..utils import ParserErrorMixin
 
 """
 Utilities for processing & displaying accounting data
@@ -26,6 +28,7 @@ class FinancialCSVParser:
 
     class TransactionInfo:
         def __init__(self, *, line_no, amount, timestamp):
+            self.ledger_entry = None
             self.line_no = line_no
             self.amount = amount
             self.timestamp = _dt_fallback(timestamp)
@@ -170,3 +173,68 @@ class PaymentCSVParser(FinancialCSVParser):
             return None
         parsed['nature'] = nature
         return parsed
+
+
+class LedgerEntryPreparator(ParserErrorMixin):
+    model = None 
+    formset = None
+    _valid_transactions = None
+
+    def __init__(self, parser):
+        super().__init__(parser)
+        if parser is not None:
+            self.transactions = parser.parsed_data
+        else:
+            self.transactions = []
+
+    def error_at_line(self, line_no, msg, params=None):
+        self.error_at_lines([line_no], msg, params)
+
+    def error_at_lines(self, line_nos, msg, params=None):
+        fmtd_msg = msg % (params or {})
+        self._errors.insert(0, (sorted(line_nos), fmtd_msg))
+
+    def prepare(self):
+        return
+
+    def model_kwargs_for_transaction(self, transaction):
+        # validate and build model kwargs for transaction
+        if transaction.amount.amount < 0:
+            self.error_at_line(
+                transaction.line_no,
+                _('Payment amount %(amount)s is negative.'),
+                params={'amount': transaction.amount}
+            )
+            return None
+
+        return {
+            'total_amount': transaction.amount,
+            'timestamp': transaction.timestamp
+        } 
+
+    def validate_global(self, valid_transactions):
+        # this method can assume that all transactions have the
+        # ledger_entry property set to something meaningful
+        return valid_transactions
+
+    @cached_property
+    def valid_transactions(self): 
+        if self._valid_transactions is None:
+            self.prepare()
+            def valid(t):
+                kwargs = self.model_kwargs_for_transaction(transaction)
+                if kwargs is not None:
+                    t.ledger_entry = self.model(**kwargs)
+                    return True
+                else:
+                    return False
+            indiv_transactions = [
+                t for transaction in self.transactions if valid(t)
+            ]
+            self._valid_transactions = validate_global(indiv_transactions)
+
+    def form_kwargs_for_transaction(self, transaction):
+        return {
+            'total_amount': transaction.amount,
+            'timestamp': transaction.timestamp
+        }
