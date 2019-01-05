@@ -191,7 +191,14 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
             return '[%s]<%s>' % (self.total_amount, self.member)
 
 
-class InternalPayment(accounting_base.BasePaymentRecord):
+class IPQuerySet(accounting_base.BasePaymentQuerySet, 
+                 accounting_base.DuplicationProtectedQuerySet):
+    pass
+
+class InternalPayment(accounting_base.BasePaymentRecord, 
+                      accounting_base.DuplicationProtectionMixin):
+
+    dupcheck_signature_fields = ('nature', 'member')
 
     member = ChoirMemberField(
         on_delete=models.PROTECT,
@@ -228,6 +235,8 @@ class InternalPayment(accounting_base.BasePaymentRecord):
         'That payment does not have enough funds left: '
         'requested %(amount)s, but only %(balance)s available.'
     )
+
+    objects = IPQuerySet.as_manager()
 
     class Meta:
         verbose_name = _('internal payment')

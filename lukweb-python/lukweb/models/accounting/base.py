@@ -1,5 +1,6 @@
 import logging
 from decimal import Decimal
+from collections import defaultdict
 
 from django.db import models
 from django.db.models import (
@@ -17,7 +18,7 @@ from djmoney.models.fields import MoneyField
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
 
-from ...payments import decimal_to_money
+from ...payments import decimal_to_money, _dt_fallback
 
 __all__ = [
     'DoubleBookModel', 'BaseFinancialRecord', 'BaseDebtRecord',
@@ -38,8 +39,16 @@ def nonzero_money_validator(money):
 
 
 class DoubleBookModel(models.Model):
+    """
+    One half of a ledger in a double-entry accounting system.
+    """
 
+    """
+    Name of the field or property representing the total amount.
+    Possibly different from the actual db column / annotation.
+    """
     TOTAL_AMOUNT_FIELD_NAME = 'total_amount'
+    TOTAL_AMOUNT_FIELD_COLUMN = 'total_amount'
 
     # This error message is vague, so subclasses should override it with
     # something that makes more sense.
@@ -198,6 +207,39 @@ class DoubleBookModel(models.Model):
         return str(self)
 
 
+# TODO: I would love for this to be an abstract subclass of 
+# our base double-ledger model, but Django complains about field clashes.
+# Probably the diamond pattern is not fully supported yet, or this is a bug.
+# Needs further digging.
+class DuplicationProtectionMixin:
+    """
+    Specify fields to be used in the duplicate checker on bulk imports.
+    The fields `timestamp` and `total_amount` are implicit.
+    """
+    dupcheck_signature_fields = None
+
+    @property
+    def dupcheck_signature(self):
+        cls = self.__class__
+        if cls.dupcheck_signature_fields is None:
+            return None
+        # translates foreign keys to the fieldname_id format,
+        # which is better for comparisons
+        sig_fields = list(
+            cls._meta.get_field(fname).column
+            for fname in cls.dupcheck_signature_fields
+        )
+        # Problem: the resolution of most banks' reporting is a day.
+        # Hence, we cannot use an exact timestamp as a cutoff point between
+        # imports, which would eliminate the need for duplicate 
+        # checking in practice.
+        date = timezone.localdate(self.timestamp)
+        amt = getattr(self, cls.TOTAL_AMOUNT_FIELD_NAME).amount
+        return (date, amt) + tuple(
+            getattr(self, field) for field in sig_fields
+        )
+
+
 class BaseFinancialRecord(DoubleBookModel):
 
     total_amount = MoneyField(
@@ -249,7 +291,7 @@ class DoubleBookQuerySet(models.QuerySet):
             return self
         # joins don't work for multiple annotations, so 
         # we have to use a subquery
-        total_amount_field_name = self.model.TOTAL_AMOUNT_FIELD_NAME
+        total_amount_field_name = self.model.TOTAL_AMOUNT_FIELD_COLUMN
         return self.annotate(**{
             cls.MATCHED_BALANCE_FIELD: self._split_sum_subquery(),
             cls.UNMATCHED_BALANCE_FIELD: ExpressionWrapper(
@@ -287,7 +329,31 @@ class DoubleBookQuerySet(models.QuerySet):
         return self.with_remote_accounts().filter(**{
             self.__class__.FULLY_MATCHED_FIELD: True
         })
-        
+
+
+class DuplicationProtectedQuerySet(DoubleBookQuerySet):
+
+    # Prepare buckets for duplication check
+    def dupcheck_buckets(self, date_bounds=None):
+        assert issubclass(self.model, DuplicationProtectionMixin)
+        if self.model.dupcheck_signature_fields is None:
+            raise TypeError(
+                'Duplicate checking is not supported on this model.'
+            )
+        historical_buckets = defaultdict(int)
+        if date_bounds is not None:
+            min_date, max_date = map(_dt_fallback, date_bounds)
+            qs = self.filter(
+                timestamp__gte=min_date,
+                timestamp__lte=max_date
+            )
+        else:
+            qs = self
+
+        for entry in qs:
+            historical_buckets[entry.dupcheck_signature] += 1
+
+        return historical_buckets 
 
 # for semantic consistency and backwards compatibility
 class BaseDebtQuerySet(DoubleBookQuerySet):
