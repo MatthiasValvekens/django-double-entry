@@ -16,7 +16,7 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
-from . import base
+from . import base, bulk_utils
 from .bulk_utils import MemberTransactionParser, PaymentCSVParser
 from .base import *
 from .utils import GnuCashFieldMixin
@@ -108,181 +108,6 @@ class ProfileAddDebtForm(GnuCashFieldMixin):
         return instance
 
 
-class FetchMembersMixin(ParserErrorMixin):
-
-    def error_at_line(self, line_no, member_str, msg, params=None):
-        self.error_at_lines([line_no], member_str, msg, params)
-
-    def error_at_lines(self, line_nos, member_str, msg, params=None):
-        if params is None:
-            params = {'member_str': member_str}
-        else:
-            params['member_str'] = member_str
-
-        fmtd_msg = msg % params
-        self._errors.insert(0, (sorted(line_nos), fmtd_msg))
-
-    def unknown_member(self, member_str, line_nos):
-        msg = _(
-            '%(member_str)s does not designate a registered member.'
-        )
-
-        self.error_at_lines(
-            line_nos, member_str, msg
-        )
-
-    def process_member_identifiers(self, data_rows):
-        # split the list into email and name indices
-        email_index, name_index = defaultdict(list), defaultdict(list)
-        for info in data_rows:
-            use_email = '@' in info.member_str
-            targ = email_index if use_email else name_index
-            key = info.member_str if use_email else info.member_str.casefold()
-            targ[key].append(info)
-
-        member_email_qs, unseen = models.ChoirMember.objects \
-            .select_related('user').with_debt_annotations().by_emails(
-                email_index.keys(), validate_unseen=True
-            )
-
-        for email in unseen:
-            ts = email_index[email]
-            self.unknown_member(email, [t.line_no for t in ts])
-
-        # TODO Restrict to active members only, maybe?
-        member_name_qs, unseen, duplicates = models.ChoirMember.objects \
-            .select_related('user').with_debt_annotations().by_full_names(
-                name_index.keys(), validate_unseen=True, validate_nodups=True
-            )
-
-        for name in unseen:
-            ts = name_index[name.casefold()]
-            self.unknown_member(name, [t.line_no for t in ts])
-
-        for name in duplicates:
-            ts = name_index[name.casefold()]
-            msg = _(
-                '%(member_str)s designates multiple registered members. '
-                'Skipped processing.',
-            )
-            self.error_at_lines(
-                [t.line_no for t in ts], name, msg
-            )
-
-        def member_email_tuples():
-            for m in member_email_qs:
-                member_str = m.user.email
-                yield (m, email_index[member_str], member_str)
-
-        def member_name_tuples():
-            for m in member_name_qs:
-                member_str = m.full_name
-                imember_str = member_str.casefold()
-                if imember_str not in duplicates:
-                    yield (m, name_index[imember_str], member_str)
-
-        return list(chain(member_email_tuples(), member_name_tuples()))
-
-
-class MiscDebtPaymentPopulator(FetchMembersMixin):
-    DEBT_MISC_PREFIX = 'bulk-debt-misc'
-
-    def __init__(self, cash_parser):
-        super().__init__(cash_parser)
-        if cash_parser is not None:
-            cash_data = cash_parser.parsed_data
-        else:
-            cash_data = []
-        member_list = self.process_member_identifiers(cash_data)
-
-        # prepare duplicate checking
-        historical_buckets = bucket_transaction_history(
-            payments.PAYMENT_NATURE_CASH,
-            cash_data
-        )
-
-        # TODO: reduce code duplication!
-        # also compute total contribution to 
-        # check for overpayments later
-        self.debt_contributions = {}
-
-        def make_initials(t):
-            member, tinfos, member_str = t
-            dupcheck = defaultdict(list)
-            contribution_by_category = defaultdict(
-                lambda: Money(Decimal('0.00'), settings.BOOKKEEPING_CURRENCY)
-            )
-            for tinfo in tinfos:
-                if tinfo.amount.amount < 0:
-                    self.error_at_line(
-                        tinfo.line_no, member_str,
-                        _('Payment amount %(amount)s is negative.'),
-                        params={'amount': tinfo.amount}
-                    )
-                    continue
-                k = bucket_key(member, tinfo)
-                occ_so_far = dupcheck[k]
-                occ_so_far.append(tinfo)
-                # ok, we've DEFINITELY not seen this one before
-                if len(occ_so_far) > historical_buckets[k]:
-                    contribution_by_category[tinfo.debt_filter] += tinfo.amount
-                    yield {
-                        'nature': tinfo.nature,
-                        'email': member.user.email,
-                        'member_id': member.pk,
-                        'name': member.full_name,
-                        'total_amount': tinfo.amount,
-                        'timestamp': tinfo.timestamp,
-                        'debt_filter': tinfo.debt_filter
-                    }
-
-            # save to debt_contributions
-            self.debt_contributions[member] = sum(
-                contribution_by_category.values(),
-                Money(Decimal('0.00'), settings.BOOKKEEPING_CURRENCY)
-            )
-
-            # report on possible duplicates
-            do_dupcheck(
-                self.error_at_lines,
-                member, historical_buckets, dupcheck
-            )
-
-            # check for per-filter overpayment if we are running in filtered
-            # mode
-            filter_slugs = contribution_by_category.keys()
-            if any(filter_slugs):
-                tallies = member.debts.balances_by_filter_slug(
-                    filter_slugs
-                )
-                for slug in filter_slugs:
-                    total = contribution_by_category[slug]
-                    balance = tallies[slug]
-                    if total > balance:
-                        lines = [
-                            t.line_no for t in tinfos if t.debt_filter == slug
-                        ]
-                        self.error_at_lines(
-                            lines, member_str, _(
-                                'Member %(member_str)s overpaid debts in '
-                                'category \'%(filter_slug)s\': balance is '
-                                '%(balance)s, but received %(total)s. '
-                            ), params={
-                                'filter_slug': slug,
-                                'balance': balance,
-                                'total': total
-                            }
-                        )
-
-        initial_data = list(chain(*map(make_initials, member_list)))
-        self.debt_formset = BulkPaymentFormSet(
-            queryset=models.InternalPayment.objects.none(),
-            initial=initial_data,
-            prefix=self.DEBT_MISC_PREFIX
-        )
-        self.debt_formset.extra = len(initial_data)
-
-
 class AddDebtFormsetPopulator(FetchMembersMixin):
 
     def __init__(self, debt_parser):
@@ -371,11 +196,17 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
         can_bulk_save = connection.features.can_return_ids_from_bulk_insert
         payments_by_member = defaultdict(lambda: defaultdict(list))
 
+        filtered_mode = None
         for form in self.extra_forms:
             data = form.cleaned_data
             member_id = data['member_id']
             # coerce falsy values (e.g. empty string) to None as a precaution
             debt_filter = data.get('debt_filter') or None
+            # if filter strings appear anywhere, we assume that they appear
+            # everywhere (the parser guarantees this)
+            # Hence, this if statement is strictly speaking unnecessary
+            if filtered_mode is None:
+                filtered_mode = debt_filter is not None
             payment = models.InternalPayment(
                 total_amount=data['total_amount'],
                 timestamp=data['timestamp'],
@@ -394,13 +225,6 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
             pk__in=list(payments_by_member.keys())
         ).with_debt_annotations()
 
-        # if filter strings appear anywhere, we assume that they appear
-        # everywhere (the parser guarantees this)
-        filtered_mode = any(
-            any(payment_set.keys())
-            for payment_set in payments_by_member.values()
-        )
-
         def filtered(member):
             member_payments = payments_by_member[member.pk]
             all_debts = member.debts.unpaid().order_by('timestamp')
@@ -418,14 +242,16 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                     )
                 yield from payments.make_payment_splits(
                     payments=sorted(pmts, key=lambda p: p.timestamp),
-                    debts=debts_by_filter[filter_slug]
+                    debts=debts_by_filter[filter_slug],
+                    split_model=models.InternalPaymentSplit
                 )
 
         def unfiltered(member):
             member_payments = payments_by_member[member.pk][None]
             return payments.make_payment_splits(
                 payments=sorted(member_payments, key=lambda p: p.timestamp),
-                debts=member.debts.unpaid().order_by('timestamp')
+                debts=member.debts.unpaid().order_by('timestamp'),
+                split_model=models.InternalPaymentSplit
             )
 
         split_generator = filtered if filtered_mode else unfiltered
@@ -446,99 +272,11 @@ BulkPaymentFormSet = modelformset_factory(
 )
 
 
-# duplication heuristics
-# Problem: the resolution of most banks' reporting is a day.
-# Hence, we cannot use an exact timestamp as a cutoff point between
-# imports, which would eliminate the need for duplicate checking in practice.
-def extr_date(trans):
-    ts = trans.timestamp
-    if isinstance(ts, datetime.datetime):
-        return timezone.localdate(ts)
-    else:
-        return ts
-
-
-def bucket_key(member, trans):
-    return member.pk, trans.amount.amount, extr_date(trans)
-
-
-# TODO: allow this thing to cope with the fact that our cash csv function
-# can now accommodate different payment natures
-def bucket_transaction_history(nature, trans_data):
-    historical_buckets = defaultdict(int)
-    if not trans_data:
-        return historical_buckets
-    min_date = payments._dt_fallback(min(map(extr_date, trans_data)))
-    max_date = payments._dt_fallback(max(map(extr_date, trans_data)))
-    payment_history = models.InternalPayment.objects.filter(
-        nature=nature,
-        timestamp__gte=min_date,
-        timestamp__lte=max_date
-    )
-
-    for p in payment_history:
-        # p.timestamp is in UTC by default
-        the_date = timezone.localdate(p.timestamp)
-        historical_buckets[
-            (p.member.pk, p.total_amount.amount, the_date)
-        ] += 1
-    return historical_buckets
-
-
-MULTIPLE_DUP_MESSAGE = _(
-    'A payment by %(member)s for amount %(amount)s '
-    'on date %(date)s appears %(hist)d times '
-    'in history, and %(import)d time(s) in '
-    'the current batch of data. '
-    'Resolution: %(dupcount)d ruled as duplicate(s).'
-)
-
-SINGLE_DUP_MESSAGE = _(
-    'A payment by %(member)s for amount %(amount)s '
-    'on date %(date)s already appears in the payment history. '
-    'Resolution: likely duplicate, skipped processing.'
-)
-
-
-def do_dupcheck(errf, member, historical_buckets, dupcheck):
-    for k, occ_in_import in dupcheck.items():
-        occ_in_hist = historical_buckets[k]
-        import_count = len(occ_in_import)
-        if not occ_in_hist or not import_count:
-            # is the latter even possible?
-            continue
-        trans = occ_in_import[0]  # representative sample
-        params = {
-            'member': member,
-            'date': extr_date(trans),
-            'amount': trans.amount,
-            'hist': occ_in_hist,
-            'import': import_count,
-            'dupcount': min(occ_in_hist, import_count),
-        }
-        # special case, this is the most likely one to occur
-        # so deserves special wording
-        if occ_in_hist == import_count == 1:
-            errf(
-                [trans.line_no],
-                None,
-                SINGLE_DUP_MESSAGE,
-                params
-            ) 
-        else:
-            # we now know that occ_in_hist is at least 2,
-            errf(
-                [t.line_no for t in occ_in_import],
-                None,
-                MULTIPLE_DUP_MESSAGE,
-                params
-            )
-
-
 class MiscDebtPaymentCSVParser(PaymentCSVParser, MemberTransactionParser):
     delimiter = ';'
     nature_column_name = 'aard'
     filter_column_name = 'filter'
+    filters_present = False
 
     class TransactionInfo(PaymentCSVParser.TransactionInfo, 
                           MemberTransactionParser.TransactionInfo):
@@ -573,11 +311,135 @@ class MiscDebtPaymentCSVParser(PaymentCSVParser, MemberTransactionParser):
                 return None
             else:
                 parsed['debt_filter'] = debt_filter
+                self.filters_present = True
         except KeyError:
             # proceed as normal
             pass
 
         return parsed
+
+
+class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
+                                bulk_utils.DuplicationProtectedPreparator,
+                                bulk_utils.CreditApportionmentMixin):
+
+    formset_prefix = 'bulk-debt-misc'
+    formset_class = BaseBulkPaymentFormSet
+    split_model = models.InternalPaymentSplit
+    model = models.InternalPayment
+
+    _debt_buckets = None
+
+    multiple_dup_message = _(
+        'A payment of nature \'%(nature)s\' by %(member)s '
+        'for amount %(amount)s on date %(date)s appears %(hist)d time(s) '
+        'in history, and %(import)d time(s) in '
+        'the current batch of data. '
+        'Resolution: %(dupcount)d ruled as duplicate(s).'
+    )
+
+    single_dup_message = _(
+        'A payment of nature \'%(nature)s\' by %(member)s '
+        'for amount %(amount)s on date %(date)s already appears '
+        'in the payment history. '
+        'Resolution: likely duplicate, skipped processing.'
+    )
+
+    def __init__(self, parser):
+        super().__init__(parser)
+        self.filtered_mode = parser.filters_present
+
+    def dup_error_params(self, signature_used):
+        # TODO: don't use magic numbers that depend on the order of
+        # dupcheck_signature_fields on the model
+        params = super().dup_error_params()
+        # get human-readable value
+        params['nature'] = models.InternalPayments.PAYMENT_NATURE_CHOICES[
+            signature_used[2] - 1
+        ]
+        params['member'] = str(self.get_member(pk=signature_used[3]))
+        return params
+
+    def form_kwargs_for_transaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        kwargs['nature'] = transaction.nature
+        kwargs['debt_filter'] = transaction.debt_filter
+        return kwargs
+
+    def model_kwargs_for_transaction(self, transaction):
+        kwargs = super().model_kwargs_for_transaction(transaction)
+        if kwargs is None:
+            return None
+        kwargs['nature'] = transaction.nature
+        return kwargs
+
+    @property
+    def overpayment_fmt_string(self):
+        if self.filtered_mode:
+            return _(
+                'Not all payments of %(member)s earmarked for '
+                'category \'%(filter_slug)s\' can be fully utilised. '
+                'Received %(total_credit)s, but only %(total_used)s '
+                'can be applied to outstanding debts.'
+            )
+        else:
+            return _(
+                'Not all payments of %(member)s can be fully utilised. '
+                'Received %(total_credit)s, but only %(total_used)s '
+                'can be applied to outstanding debts.'
+            )
+
+    def overpayment_error_params(self, debt_key, total_used, total_credit): 
+        if self.filtered_mode:
+            member_id, filter_slug = debt_key
+            return {
+                'member': str(self.get_member(pk=member_id)),
+                'filter_slug': filter_slug,
+                'total_used': total_used,
+                'total_credit': total_credit
+            }
+        else:
+            return {
+                'member': str(self.get_member(pk=debt_key)),
+                'total_used': total_used,
+                'total_credit': total_credit
+            }
+
+    def transaction_buckets(self):
+        # if there are no filters present, we can simply go by
+        # member ID
+        
+        # in filtered mode, we have to work a little harder
+        trans_buckets = defaultdict(list)
+        filters_involved = []
+        sep_filters = self.filtered_mode
+        for t in self.valid_transactions:
+            member_id = t.ledger_entry.member.pk
+            if sep_filters:
+                trans_buckets[(member_id, t.debt_filter)].append(t)
+                filters_involved.append(t.debt_filter)
+            else:
+                trans_buckets[member_id].append(t)
+
+        debt_qs = models.InternalDebtItem.objects.filter(
+            member_id__in=self.member_ids()
+        ).with_payments().unpaid().order_by('timestamp')
+
+        debt_buckets = defaultdict(list)
+        if sep_filters:
+            debt_qs.filter(filter_slug__in=filters_involved)
+            for debt in debt_qs:
+                debt_buckets[(debt.member_id, debt.filter_slug)].append(debt)
+        else:
+            for debt in debt_qs:
+                debt_buckets[debt.member_id].append(debt)
+        
+        self._debt_buckets = debt_buckets
+
+        return trans_buckets 
+    
+    def debts_for(self, debt_key):
+        return self._debt_buckets[debt_key]
 
 
 class BulkPaymentUploadForm(CSVUploadForm):

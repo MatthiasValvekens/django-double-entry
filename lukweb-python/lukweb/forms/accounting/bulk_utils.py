@@ -267,9 +267,8 @@ class LedgerEntryPreparator(ParserErrorMixin):
 
 class FetchMembersMixin(LedgerEntryPreparator):
 
-    # TODO: is this still necessary to keep around?
-    transactions_by_member_id = None
-    members_by_str = None
+    _members_by_str = None
+    _members_by_id = None
 
     def unknown_member(self, member_str, line_nos):
         msg = _(
@@ -279,6 +278,16 @@ class FetchMembersMixin(LedgerEntryPreparator):
         self.error_at_lines(
             line_nos, msg, params={'member_str': member_str}
         )
+
+    def get_member(self, pk=None, member_str=None):
+        if pk is not None:
+            return self._members_by_id[pk]
+        elif member_str is not None:
+            return self._members_by_str[member_str]
+        raise ValueError('You must supply either pk or member_str')
+
+    def member_ids(self):
+        return self._members_by_id.keys()
 
     def prepare(self): 
         super().prepare()
@@ -319,21 +328,30 @@ class FetchMembersMixin(LedgerEntryPreparator):
                 [t.line_no for t in ts], msg, params={'member_str': name},
             )
 
-        transactions_by_member_id = defaultdict(list)
-        members_by_str = dict()
+        self._members_by_str = dict()
+        self._member_by_id = dict()
 
+        # build member dictionaries
         for m in member_email_qs:
             member_str = m.user.email
-            members_by_str[member_str] = m
-            transactions_by_member_id[m.pk] = email_index[member_str]
+            self._members_by_str[member_str] = m
+            self._members_by_id[m.pk] = m
 
         for m in member_name_qs:
             member_str = m.full_name
             imember_str = member_str.casefold()
             if imember_str not in duplicates:
-                members_by_str[member_str] = m
-                transactions_by_member_id[m.pk] = name_index[imember_str]
+                self._members_by_str[member_str] = m
+                self._members_by_id[m.pk] = m
 
+        # It's technically more efficient to keep the transaction dicts around
+        # to refer to later, but since later calls to validate_global might
+        # shrink the list of valid transactions, this is a bad idea for 
+        # maintainability. Amdahl.
+
+    # TODO: In the long term I would like to get rid of these eph
+    # forms as well. That should be a bit easier to plan with the
+    # new bulk_utils module.
     def form_kwargs_for_transaction(self, transaction):
         kwargs = super().form_kwargs_for_transaction(transaction)
         member = transaction.ledger_entry.member
@@ -344,14 +362,16 @@ class FetchMembersMixin(LedgerEntryPreparator):
     
     def model_kwargs_for_transaction(self, transaction):
         kwargs = super().model_kwargs_for_transaction(transaction)
+        if kwargs is None:
+            return None
         try:
-            member = self.members_by_str[transaction.member_str]
+            member = self._members_by_str[transaction.member_str]
             kwargs['member'] = member
             return kwargs
         except KeyError: 
             # member search errors have already been logged
             # in the preparation step, so we don't care
-            return kwargs
+            return None
 
 
 class DuplicationProtectedPreparator(LedgerEntryPreparator):
@@ -419,13 +439,20 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
     # optional, can be derived through reflection
     payment_fk_name = None
     debt_fk_name = None
-    _debt_buckets = None
+    _trans_buckets = None
 
-    def debt_buckets(self):
+    def debts_for(self, debt_key):
         raise NotImplementedError
 
-    def transactions_for(self, debt_key):
+    def transaction_buckets(self):
         raise NotImplementedError
+
+    def overpayment_error_params(self, debt_key, total_used, total_credit): 
+        return {
+            'debt_key': debt_key,
+            'total_used': total_used,
+            'total_credit': total_credit
+        }
 
     def make_splits(self, payments, debts):
         from ...payments import make_payment_splits
@@ -439,9 +466,9 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
         super().review()
         # compute the total credit used vs the total
         # credit established, and notify the treasurer
-        self._debt_buckets = self.debt_buckets()
-        for key, debts in self._debt_buckets.items():
-            transactions = self.transactions_for(debt_key) 
+        self._trans_buckets = self.transaction_buckets()
+        for key, transactions in self._trans_buckets.items():
+            debts = self.debts_for(debt_key) 
             payments = [
                 t.ledger_entry for t in transactions
             ]
@@ -455,14 +482,12 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
                 Money(0, settings.BOOKKEEPING_CURRENCY)
             )
             if total_used < total_credit:
-                self.error(
+                self.error_at_lines(
                     [t.line_no for t in transactions],
                     self.overpayment_fmt_string,
-                    params={
-                        'key': key,
-                        'total_used': total_used,
-                        'total_credit': total_credit
-                    }
+                    params=self.overpayment_error_params(
+                        key, total_used, total_credit
+                    )
                 )
                 # TODO: figure out how to deal with refunds here
                 # I'm convinced again that having a to_refund account in gnucash
