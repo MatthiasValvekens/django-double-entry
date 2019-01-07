@@ -469,9 +469,11 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
         self._trans_buckets = self.transaction_buckets()
         for key, transactions in self._trans_buckets.items():
             debts = self.debts_for(debt_key) 
-            payments = [
-                t.ledger_entry for t in transactions
-            ]
+            payments = sorted([
+                    t.ledger_entry for t in transactions
+                ], 
+                key=lambda p: p.timestamp
+            )
             splits = self.make_splits(payments, debts)
             total_used = sum(
                 (s.amount for s in splits),
