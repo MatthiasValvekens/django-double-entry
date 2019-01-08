@@ -1,6 +1,7 @@
 import logging
 import re
 from collections import defaultdict
+from django.shortcuts import render
 from decimal import Decimal
 from itertools import chain
 
@@ -11,14 +12,13 @@ from djmoney.money import Money
 
 from ... import payments, models
 from . import internal, ticketing, bulk_utils
-from ..utils import ParserErrorMixin
+from ..utils import ParserErrorMixin, CSVUploadForm
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    'DebtTransferPaymentPreparator', 'BankCSVParser',
-    'FortisCSVParser'
+    'BankCSVParser', 'FortisCSVParser', 'BulkTransferUploadForm'
 ]
 
 
@@ -213,3 +213,23 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
 
     def debts_for(self, debt_key):
         return self._debt_buckets[debt_key]
+
+
+class BulkTransferUploadForm(bulk_utils.FinancialCSVUploadForm):
+    ledger_preparator_classes = (DebtTransferPaymentPreparator,)
+    csv_parser_class = FortisCSVParser
+    upload_field_label = _('Electronic transfers (.csv)')
+
+    def render_confirmation_page(self, request, context=None):
+        context = context or {}
+        # TODO: reservation stuff will wind up here
+        internaldebt, = self.formset_preparators
+        context.update({
+            'disable_margins': True,
+            'internaldebt_proc_errors': internaldebt.errors,
+            'internaldebt_formset': internaldebt.formset,
+        })
+
+        return render(
+            request, 'payments/process_bulk_transfers.html', context
+        )

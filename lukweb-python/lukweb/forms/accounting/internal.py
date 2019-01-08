@@ -6,6 +6,7 @@ from itertools import chain
 
 from django import forms
 from django.utils.text import slugify
+from django.shortcuts import render
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.db.models import Q
@@ -29,12 +30,9 @@ from ...widgets import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    'EphemeralPaymentForm', 'EphemeralAddDebtForm',
-    'MiscDebtPaymentPreparator', 'InternalDebtRecordPreparator',
-    'BulkAddDebtFormSet', 'BulkPaymentFormSet',
     'BulkPaymentUploadForm', 'BulkDebtUploadForm',
     'ProfileAddDebtForm', 'InternalPaymentSplitFormSet'
-] + base.__all__
+]
 
 
 class EphemeralPaymentForm(ModelForm):
@@ -145,6 +143,7 @@ BulkAddDebtFormSet = modelformset_factory(
     form=EphemeralAddDebtForm,
     formset=BaseBulkAddDebtFormSet
 )
+
 
 class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
     formset_prefix = 'bulk-add-debt'
@@ -428,39 +427,6 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
         return self._debt_buckets[debt_key]
 
 
-class BulkPaymentUploadForm(CSVUploadForm):
-
-    transfer_csv = forms.FileField(
-        label=_('Electronic transfers (.csv)'),
-        required=False,
-    )
-
-    misc_debt_csv = forms.FileField(
-        label=_('Misc. internal debt payments (.csv)'),
-        required=False,
-    )
-
-    # TODO: we should cut down on boilerplate by implementing a registration
-    # mechanism. On the other hand, messing with django's form metaclasses
-    # might prove nasty
-    def clean_transfer_csv(self):
-        return self._validate_csv('transfer_csv')
-
-    def clean_misc_debt_csv(self):
-        return self._validate_csv('misc_debt_csv')
-
-    @property
-    def csv_parser_classes(self):
-        from .transfers import FortisCSVParser
-        # TODO: make parser configurable in globals
-        # (this is why I don't want to override FileField:
-        #   we'd have to override it again to make this property dynamic)
-        return {
-            'transfer_csv': FortisCSVParser,
-            'misc_debt_csv': MiscDebtPaymentCSVParser
-        }
-
-
 class DebtCSVParser(MemberTransactionParser):
     delimiter = ';'
 
@@ -483,21 +449,42 @@ class DebtCSVParser(MemberTransactionParser):
         return parsed
 
 
-class BulkDebtUploadForm(CSVUploadForm):
+class BulkDebtUploadForm(bulk_utils.FinancialCSVUploadForm):
+    ledger_preparator_classes = (InternalDebtRecordPreparator,)
+    csv_parser_class = DebtCSVParser
+    upload_field_label = _('Debt data (.csv)')
 
-    debt_csv = forms.FileField(
-        label=_('Debt data (.csv)'),
-        required=True,
-    )
+    def render_confirmation_page(self, request, context=None):
+        context = context or {}
+        prep = self.formset_preparator
+        context.update({
+            'disable_margins': True,
+            'debt_proc_errors': prep.errors,
+            'formset': prep.formset,
+            
+        })
 
-    def clean_debt_csv(self):
-        return self._validate_csv('debt_csv')
+        return render(
+            request, 'payments/process_bulk_debts.html', context
+        )
 
-    @property
-    def csv_parser_classes(self):
-        return {
-            'debt_csv': DebtCSVParser
-        }
+class BulkPaymentUploadForm(bulk_utils.FinancialCSVUploadForm):
+    ledger_preparator_classes = (MiscDebtPaymentPreparator,)
+    csv_parser_class = MiscDebtPaymentCSVParser
+    upload_field_label = _('Misc. internal debt payments (.csv)')
+
+    def render_confirmation_page(self, request, context=None):
+        context = context or {}
+        prep = self.formset_preparator
+        context.update({
+            'disable_margins': True,
+            'misc_debt_proc_errors': prep.errors,
+            'misc_debt_formset': prep.formset,
+        })
+
+        return render(
+            request, 'payments/process_bulk_payments.html', context
+        )
 
 
 class InternalPaymentSplitFormSet(InlineTransactionSplitFormSet):

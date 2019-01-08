@@ -3,7 +3,10 @@ from csv import DictReader
 from decimal import Decimal, DecimalException
 from collections import defaultdict
 
+from django import forms
 from django.conf import settings
+from django.core.exceptions import SuspiciousOperation
+from django.db import transaction as db_transaction
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import (
@@ -13,7 +16,7 @@ from djmoney.money import Money
 
 from ... import models
 from ...utils import _dt_fallback
-from ..utils import ParserErrorMixin
+from ..utils import ParserErrorMixin, CSVUploadForm
 
 """
 Utilities for processing & displaying accounting data
@@ -512,3 +515,54 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
                 # is the best way to deal with this, but we need to
                 # have a qif_excluded field on payments in case the treasurer
                 # wants to deal with these things manually
+
+
+class FinancialCSVUploadForm(CSVUploadForm):
+    ledger_preparator_classes = ()
+    upload_field_label = None
+    csv_parser_class = None
+
+    csv = forms.FileField()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['csv'].label = self.upload_field_label
+    
+    @cached_property
+    def formset_preparators(self):
+        data = self.cleaned_data['csv']
+        return tuple(
+            prep(data) for prep in self.ledger_preparator_classes
+        )
+
+    # is the most common use case
+    @property
+    def formset_preparator(self):
+        assert len(self.ledger_preparator_classes) == 1
+        return self.formset_preparators[0]
+ 
+    def render_confirmation_page(self, request, context=None):
+        raise NotImplementedError
+
+    @classmethod
+    def submit_confirmation(cls, post_data):
+        # call save() on the right formsets after user confirmation
+        formsets = [
+            prep.formset_class(post_data, prefix=prep.formset_prefix)
+            for prep in cls.ledger_preparator_classes 
+        ]
+
+        dirty = False
+        for formset in formsets:
+            # this means someone tampered with the POST data,
+            # so we have no obligation to give a nice response
+            if not formset.is_valid():
+                logger.error(formset.errors)
+                dirty = True
+
+        if dirty:
+            raise SuspiciousOperation()
+
+        with db_transaction.atomic():
+            for formset in formsets:
+                formset.save()
