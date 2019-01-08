@@ -104,7 +104,7 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
                                     bulk_utils.CreditApportionmentMixin):
 
     model = models.InternalPayment
-    formset_class = internal.BaseBulkPaymentFormSet
+    formset_class = internal.BulkPaymentFormSet
     split_model = models.InternalPaymentSplit
     formset_prefix = 'bulk-debt-transfers'
     prefix_digit = payments.OGM_INTERNAL_DEBT_PREFIX
@@ -137,11 +137,18 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
             'total_credit': total_credit
         }
 
+    def dup_error_params(self, signature_used):
+        # TODO: don't use magic numbers that depend on the order of
+        # dupcheck_signature_fields on the model
+        params = super().dup_error_params(signature_used)
+        params['member'] = str(self._members_by_id[signature_used[3]])
+        return params
+
     def model_kwargs_for_transaction(self, transaction):
         kwargs = super().model_kwargs_for_transaction(transaction)
         if kwargs is None:
             return None
-        pk = parse_internal_debt_ogm(transaction.ogm)
+        pk = payments.parse_internal_debt_ogm(transaction.ogm)
         member = self._members_by_id[pk]
         # the pk part might match accidentally
         # so we check the hidden token digest too.
@@ -156,6 +163,7 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
     def form_kwargs_for_transaction(self, transaction):
         kwargs = super().form_kwargs_for_transaction(transaction)
         member = transaction.ledger_entry.member
+        kwargs['ogm'] = transaction.ogm
         kwargs['member_id'] = member.pk
         kwargs['name'] = member.full_name
         kwargs['email'] = member.user.email
@@ -176,10 +184,11 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
         # if the OGM validates properly AND is not found in our system,
         # it probably simply corresponds to a transaction that we don't
         # care about
-        logger.debug(
-            'OGMs not corresponding to valid user records: %s.', 
-            ', '.join(unseen)
-        )
+        if unseen:
+            logger.debug(
+                'OGMs not corresponding to valid user records: %s.', 
+                ', '.join(unseen)
+            )
 
         self._members_by_id = {
             member.pk: member for member in member_qs

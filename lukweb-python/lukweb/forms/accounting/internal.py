@@ -331,12 +331,14 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
 
     def __init__(self, parser):
         super().__init__(parser)
-        self.filtered_mode = parser.filters_present
+        self.filtered_mode = (
+            parser.filters_present if parser is not None else False
+        )
 
     def dup_error_params(self, signature_used):
         # TODO: don't use magic numbers that depend on the order of
         # dupcheck_signature_fields on the model
-        params = super().dup_error_params()
+        params = super().dup_error_params(signature_used)
         # get human-readable value
         params['nature'] = models.InternalPayments.PAYMENT_NATURE_CHOICES[
             signature_used[2] - 1

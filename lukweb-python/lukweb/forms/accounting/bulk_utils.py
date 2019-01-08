@@ -193,8 +193,8 @@ class LedgerEntryPreparator(ParserErrorMixin):
     def error_at_line(self, line_no, msg, params=None):
         self.error_at_lines([line_no], msg, params)
 
-    def error_at_lines(self, line_nos, msg, params=None):
-        fmtd_msg = msg % (params or {})
+    def error_at_lines(self, line_nos, msg, params):
+        fmtd_msg = msg % params
         self._errors.insert(0, (sorted(line_nos), fmtd_msg))
 
     # The prepare/review methods are called before
@@ -393,6 +393,9 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
 
     def validate_global(self, valid_transactions):
         valid_transactions = super().validate_global(valid_transactions)
+        # early out, nothing to do
+        if not valid_transactions:
+            return []
         dates = [
             timezone.localdate(t.timestamp) for t in valid_transactions
         ]
@@ -413,7 +416,7 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
                 dupcount = min(occ_in_hist, occ_in_import)
                 if occ_in_hist:
                     # signal duplicate with an error message
-                    params = dup_error_params(sig)
+                    params = self.dup_error_params(sig)
                     params['hist'] = occ_in_hist
                     params['import'] = occ_in_import
                     params['dupcount'] = dupcount
@@ -441,7 +444,7 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
     def dup_error_params(self, signature_used):
         return {
             'date': signature_used[0],
-            'amount': signature_used[1],
+            'amount': Money(signature_used[1], settings.BOOKKEEPING_CURRENCY),
         }
 
 
@@ -481,7 +484,7 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
         # credit established, and notify the treasurer
         self._trans_buckets = self.transaction_buckets()
         for key, transactions in self._trans_buckets.items():
-            debts = self.debts_for(debt_key) 
+            debts = self.debts_for(key) 
             payments = sorted([
                     t.ledger_entry for t in transactions
                 ], 
