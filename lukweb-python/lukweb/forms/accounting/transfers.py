@@ -17,7 +17,8 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    'ElectronicPaymentPopulator', 'BankCSVParser'
+    'DebtTransferPaymentPreparator', 'BankCSVParser',
+    'FortisCSVParser'
 ]
 
 
@@ -28,7 +29,7 @@ __all__ = [
 
 class BankCSVParser(bulk_utils.PaymentCSVParser):
     
-    class TransactionInfo(PaymentCSVParser.TransactionInfo): 
+    class TransactionInfo(bulk_utils.PaymentCSVParser.TransactionInfo): 
         def __init__(self, *, ogm, **kwargs):
             super().__init__(**kwargs)
             self.ogm = ogm
@@ -88,7 +89,7 @@ class TransferRecordPreparator(bulk_utils.LedgerEntryPreparator):
     def ogm_applies(self, ogm):
         try:
             prefix, modulus = payments.parse_ogm(ogm)
-            return self.prefix_digit == str(prefix)[0]:
+            return self.prefix_digit == str(prefix)[0]
         except ValueError:
             return False
 
