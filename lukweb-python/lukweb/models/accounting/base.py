@@ -64,6 +64,7 @@ class DoubleBookModel(models.Model):
     _split_model = None
     _remote_target_field = None
     _other_half_model = None
+    _fresh = False
 
     timestamp = models.DateTimeField(
         verbose_name=pgettext_lazy(
@@ -167,14 +168,17 @@ class DoubleBookModel(models.Model):
             )
         except AttributeError:
             # a record that is not in the DB yet is by definition 
-            # completely unmatched
-            if self.pk is None:
+            # completely unmatched. If it is freshly saved, the 
+            # same should apply.
+            if self.pk is None or self._fresh:
                 return decimal_to_money(Decimal('0.00'))
             logger.debug(
                 'PERFORMANCE WARNING: '
                 'falling back to database deluge '
                 'for matched_balance computation. '
-                'Please review queryset usage.'
+                'Please review queryset usage. '
+                'Object of type %(model)s with id %(pk)s', 
+                {'model': self.__class__, 'pk': self.pk}
             )
             import traceback
             logger.debug(''.join(traceback.format_stack()))
@@ -207,6 +211,12 @@ class DoubleBookModel(models.Model):
     # string value that will be used in select fields in admin forms
     def form_select_str(self):
         return str(self)
+
+    def save(self):
+        # 'remember' when saving a new object
+        if self.pk is None:
+            self._fresh = True
+        super().save()
 
 
 # TODO: I would love for this to be an abstract subclass of 

@@ -196,14 +196,8 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                 nature=data['nature'],
                 member_id=member_id
             )
-            if commit and not can_bulk_save:
-                payment.save()
             payments_by_member[member_id][debt_filter].append(payment)
-        if commit and can_bulk_save:
-            def all_payments():
-                for payment_set in payments_by_member.values():
-                    yield from chain(*iter(payment_set.values()))
-            models.InternalPayment.objects.bulk_create(all_payments())
+
         member_qs = models.ChoirMember.objects.filter(
             pk__in=list(payments_by_member.keys())
         ).with_debt_annotations()
@@ -238,6 +232,24 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
             )
 
         split_generator = filtered if filtered_mode else unfiltered
+
+        # save payments before building splits, otherwise the ORM
+        # will not set fk's correctly
+        if commit:
+            def all_payments():
+                for payment_set in payments_by_member.values():
+                    yield from chain(*iter(payment_set.values()))
+
+            if can_bulk_save:
+                models.InternalPayment.objects.bulk_create(all_payments())
+            else:
+                logger.debug(
+                    'Database does not support RETURNING on bulk inserts. '
+                    'Fall back to saving in a loop.'
+                )
+                for p in all_payments():
+                    p.save()
+
         splits_to_create = chain(
             *(split_generator(member) for member in member_qs)
         )
