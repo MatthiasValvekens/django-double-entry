@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     'EphemeralPaymentForm', 'EphemeralAddDebtForm',
-    'MiscDebtPaymentPopulator', 'AddDebtFormsetPopulator',
+    'MiscDebtPaymentPreparator', 'InternalDebtRecordPreparator',
     'BulkAddDebtFormSet', 'BulkPaymentFormSet',
     'BulkPaymentUploadForm', 'BulkDebtUploadForm',
     'ProfileAddDebtForm', 'InternalPaymentSplitFormSet'
@@ -108,45 +108,6 @@ class ProfileAddDebtForm(GnuCashFieldMixin):
         return instance
 
 
-class AddDebtFormsetPopulator(FetchMembersMixin):
-
-    def __init__(self, debt_parser):
-        super().__init__(debt_parser)
-        if debt_parser is not None:
-            debt_data = debt_parser.parsed_data
-        else:
-            debt_data = []
-        member_list = self.process_member_identifiers(debt_data)
-
-        def make_initials(t):
-            member, dinfos, member_str = t
-            for dinfo in dinfos:
-                if dinfo.amount.amount < 0:
-                    self.error_at_line(
-                        dinfo.line_no, member_str,
-                        _('Debt amount %(amount)s is negative.'),
-                        params={'amount': dinfo.amount}
-                    )
-                    continue
-                yield {
-                    'email': member.user.email,
-                    'member_id': member.pk,
-                    'name': member.full_name,
-                    'total_amount': dinfo.amount,
-                    'gnucash': dinfo.gnucash,
-                    'comment': dinfo.comment,
-                    'filter_slug': dinfo.filter_slug,
-                    'timestamp':dinfo.timestamp
-                }
-
-        initial_data = list(chain(*map(make_initials, member_list)))
-        self.debt_formset = BulkAddDebtFormSet(
-            queryset=models.InternalDebtItem.objects.none(),
-            initial=initial_data
-        )
-        self.debt_formset.extra = len(initial_data)
-
-
 class BaseBulkAddDebtFormSet(forms.BaseModelFormSet):
 
     def save(self, commit=True):
@@ -177,6 +138,30 @@ class BaseBulkAddDebtFormSet(forms.BaseModelFormSet):
         if commit:
             models.InternalDebtItem.objects.bulk_create(debts)
         return debts
+
+
+class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
+    formset_prefix = 'bulk-add-debt'
+    formset_class = BaseBulkAddDebtFormSet    
+    model = models.InternalDebtItem
+
+    def form_kwargs_for_tarnsaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        kwargs['comment'] = transaction.comment
+        kwargs['gnucash'] = transaction.gnucash
+        kwargs['filter_slug'] = transaction.filter_slug
+        return kwargs
+
+    def model_kwargs_for_transaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        if kwargs is None:
+            return None
+        kwargs['comment'] = transaction
+        kwargs['gnucash'] = models.GnuCashCategory.get_category(
+            transaction.gnucash, create=False
+        )
+        kwargs['filter_slug'] = transaction.filter_slug
+        return kwargs
 
 
 BulkAddDebtFormSet = modelformset_factory(

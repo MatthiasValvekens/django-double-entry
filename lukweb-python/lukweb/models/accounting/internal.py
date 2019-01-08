@@ -43,14 +43,20 @@ class GnuCashCategory(models.Model):
         ordering = ('name',)
 
     @classmethod
-    def get_category(cls, name):
+    def get_category(cls, name, create=True):
         if not name:
             return None
-        obj, created = cls.objects.get_or_create(
-            name__iexact=name,
-            # need to set defaults when using __iexact
-            defaults={'name': name}
-        )
+        if create:
+            obj, created = cls.objects.get_or_create(
+                name__iexact=name,
+                # need to set defaults when using __iexact
+                defaults={'name': name}
+            )
+        else:
+            try:
+                obj = cls.objects.get(name__iexact=name)
+            except cls.DoesNotExist:
+                obj = cls(name=name)
         return obj
 
     def __str__(self):
