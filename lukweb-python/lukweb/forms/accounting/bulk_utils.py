@@ -11,6 +11,7 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
+from ... import models
 from ...utils import _dt_fallback
 from ..utils import ParserErrorMixin
 
@@ -231,24 +232,35 @@ class LedgerEntryPreparator(ParserErrorMixin):
         if self._valid_transactions is None:
             self.prepare()
             def valid(t):
-                kwargs = self.model_kwargs_for_transaction(transaction)
+                kwargs = self.model_kwargs_for_transaction(t)
                 if kwargs is not None:
                     t.ledger_entry = self.model(**kwargs)
                     return True
                 else:
                     return False
             indiv_transactions = [
-                t for transaction in self.transactions if valid(t)
+                t for t in self.transactions if valid(t)
             ]
-            self._valid_transactions = validate_global(indiv_transactions)
+            self._valid_transactions = self.validate_global(indiv_transactions)
             self.review()
+
         return self._valid_transactions
 
     def form_kwargs_for_transaction(self, transaction):
+        if self._valid_transactions is None:
+            raise ValueError(
+                'Ledger entries are not ready.'
+            )
         return {
             'total_amount': transaction.amount,
             'timestamp': transaction.timestamp
         }
+
+    def formset_kwargs(self):
+        return {}
+
+    def run(self):
+        self.formset
 
     @cached_property
     def formset(self):
@@ -259,9 +271,10 @@ class LedgerEntryPreparator(ParserErrorMixin):
         fs = self.formset_class(
             queryset=self.model._default_manager.none(),
             initial=initial_data,
-            prefix=self.formset_prefix
+            prefix=self.formset_prefix,
+            **self.formset_kwargs()
         )
-        fs.extra = len(initial_data)
+        fs.extra = len(self.valid_transactions)
         return fs
 
 
@@ -329,7 +342,7 @@ class FetchMembersMixin(LedgerEntryPreparator):
             )
 
         self._members_by_str = dict()
-        self._member_by_id = dict()
+        self._members_by_id = dict()
 
         # build member dictionaries
         for m in member_email_qs:

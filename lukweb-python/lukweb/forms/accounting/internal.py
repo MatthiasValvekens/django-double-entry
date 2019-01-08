@@ -140,12 +140,18 @@ class BaseBulkAddDebtFormSet(forms.BaseModelFormSet):
         return debts
 
 
+BulkAddDebtFormSet = modelformset_factory(
+    model=models.InternalDebtItem,
+    form=EphemeralAddDebtForm,
+    formset=BaseBulkAddDebtFormSet
+)
+
 class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
     formset_prefix = 'bulk-add-debt'
-    formset_class = BaseBulkAddDebtFormSet    
+    formset_class = BulkAddDebtFormSet
     model = models.InternalDebtItem
 
-    def form_kwargs_for_tarnsaction(self, transaction):
+    def form_kwargs_for_transaction(self, transaction):
         kwargs = super().form_kwargs_for_transaction(transaction)
         kwargs['comment'] = transaction.comment
         kwargs['gnucash'] = transaction.gnucash
@@ -153,22 +159,15 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
         return kwargs
 
     def model_kwargs_for_transaction(self, transaction):
-        kwargs = super().form_kwargs_for_transaction(transaction)
+        kwargs = super().model_kwargs_for_transaction(transaction)
         if kwargs is None:
             return None
         kwargs['comment'] = transaction
-        kwargs['gnucash'] = models.GnuCashCategory.get_category(
+        kwargs['gnucash_category'] = models.GnuCashCategory.get_category(
             transaction.gnucash, create=False
         )
         kwargs['filter_slug'] = transaction.filter_slug
         return kwargs
-
-
-BulkAddDebtFormSet = modelformset_factory(
-    model=models.InternalDebtItem,
-    form=EphemeralAddDebtForm,
-    formset=BaseBulkAddDebtFormSet
-)
 
 
 # This class can process both electronic transfers and
@@ -309,7 +308,7 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
                                 bulk_utils.CreditApportionmentMixin):
 
     formset_prefix = 'bulk-debt-misc'
-    formset_class = BaseBulkPaymentFormSet
+    formset_class = BulkPaymentFormSet
     split_model = models.InternalPaymentSplit
     model = models.InternalPayment
 
