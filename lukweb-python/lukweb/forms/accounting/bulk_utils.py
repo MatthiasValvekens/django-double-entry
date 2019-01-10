@@ -1,4 +1,5 @@
 import datetime
+import logging
 from csv import DictReader
 from decimal import Decimal, DecimalException
 from collections import defaultdict
@@ -17,6 +18,8 @@ from djmoney.money import Money
 from ... import models
 from ...utils import _dt_fallback
 from ..utils import ParserErrorMixin, CSVUploadForm
+
+logger = logging.getLogger(__name__)
 
 """
 Utilities for processing & displaying accounting data
@@ -185,6 +188,7 @@ class LedgerEntryPreparator(ParserErrorMixin):
     formset_class = None
     formset_prefix = None
     _valid_transactions = None
+    _formset = None
 
     def __init__(self, parser):
         super().__init__(parser)
@@ -263,10 +267,6 @@ class LedgerEntryPreparator(ParserErrorMixin):
         return {}
 
     def run(self):
-        self.formset
-
-    @cached_property
-    def formset(self):
         initial_data = [
             self.form_kwargs_for_transaction(t)
             for t in self.valid_transactions
@@ -278,7 +278,13 @@ class LedgerEntryPreparator(ParserErrorMixin):
             **self.formset_kwargs()
         )
         fs.extra = len(self.valid_transactions)
-        return fs
+        self._formset = fs
+
+    @property
+    def formset(self):
+        if self._formset is None:
+            self.run()
+        return self._formset
 
 
 class FetchMembersMixin(LedgerEntryPreparator):
@@ -413,13 +419,13 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
             import_buckets[sig].append(transaction)
 
         def strip_duplicates():
-            for sig, transactions in import_buckets.items():
+            for dup_sig, transactions in import_buckets.items():
                 occ_in_import = len(transactions)
-                occ_in_hist = historical_buckets[sig]
+                occ_in_hist = historical_buckets[dup_sig]
                 dupcount = min(occ_in_hist, occ_in_import)
                 if occ_in_hist:
                     # signal duplicate with an error message
-                    params = self.dup_error_params(sig)
+                    params = self.dup_error_params(dup_sig)
                     params['hist'] = occ_in_hist
                     params['import'] = occ_in_import
                     params['dupcount'] = dupcount

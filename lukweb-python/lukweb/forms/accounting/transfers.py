@@ -1,19 +1,14 @@
 import logging
 import re
 from collections import defaultdict
-from django.shortcuts import render
-from decimal import Decimal
-from itertools import chain
 
+from django.shortcuts import render
 from django.utils.translation import (
     ugettext_lazy as _,
 )
-from djmoney.money import Money
 
+from . import internal, bulk_utils
 from ... import payments, models
-from . import internal, ticketing, bulk_utils
-from ..utils import ParserErrorMixin, CSVUploadForm
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 

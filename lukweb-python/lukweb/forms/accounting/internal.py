@@ -1,27 +1,21 @@
-import datetime
 import logging
 from collections import defaultdict
-from decimal import Decimal
 from itertools import chain
 
 from django import forms
-from django.utils.text import slugify
-from django.shortcuts import render
-from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.db.models import Q
 from django.forms.models import ModelForm, modelformset_factory
-from django.utils import timezone
+from django.shortcuts import render
+from django.utils.text import slugify
 from django.utils.translation import (
     ugettext_lazy as _,
 )
-from djmoney.money import Money
 
-from . import base, bulk_utils
-from .bulk_utils import MemberTransactionParser, PaymentCSVParser
+from . import bulk_utils
 from .base import *
+from .bulk_utils import MemberTransactionParser, PaymentCSVParser
 from .utils import GnuCashFieldMixin
-from ..utils import ParserErrorMixin, CSVUploadForm
 from ... import payments, models
 from ...widgets import (
     DatalistInputWidget, MoneyWidget,
@@ -247,8 +241,8 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                     'Database does not support RETURNING on bulk inserts. '
                     'Fall back to saving in a loop.'
                 )
-                for p in all_payments():
-                    p.save()
+                for payment in all_payments():
+                    payment.save()
 
         splits_to_create = chain(
             *(split_generator(member) for member in member_qs)
@@ -351,7 +345,7 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
         # dupcheck_signature_fields on the model
         params = super().dup_error_params(signature_used)
         # get human-readable value
-        params['nature'] = models.InternalPayments.PAYMENT_NATURE_CHOICES[
+        params['nature'] = models.InternalPayment.PAYMENT_NATURE_CHOICES[
             signature_used[2] - 1
         ]
         params['member'] = str(self.get_member(pk=signature_used[3]))

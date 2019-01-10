@@ -212,11 +212,11 @@ class DoubleBookModel(models.Model):
     def form_select_str(self):
         return str(self)
 
-    def save(self):
+    def save(self, **kwargs):
         # 'remember' when saving a new object
         if self.pk is None:
             self._fresh = True
-        super().save()
+        super().save(**kwargs)
 
 
 # TODO: I would love for this to be an abstract subclass of 
