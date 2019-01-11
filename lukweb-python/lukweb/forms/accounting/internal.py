@@ -10,7 +10,7 @@ from django.forms.models import ModelForm, modelformset_factory
 from django.shortcuts import render
 from django.utils.text import slugify
 from django.utils.translation import (
-    ugettext_lazy as _,
+    ugettext_lazy as _, ugettext
 )
 
 from . import bulk_utils
@@ -372,34 +372,33 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
     @property
     def overpayment_fmt_string(self):
         if self.filtered_mode:
-            return _(
+            specific = ugettext(
                 'Not all payments of %(member)s earmarked for '
-                'category \'%(filter_slug)s\' can be fully utilised. '
-                'Received %(total_credit)s, but only %(total_used)s '
-                'can be applied to outstanding debts.'
+                'category \'%(filter_slug)s\' can be fully utilised.'
             )
         else:
-            return _(
-                'Not all payments of %(member)s can be fully utilised. '
-                'Received %(total_credit)s, but only %(total_used)s '
-                'can be applied to outstanding debts.'
+            specific = ugettext(
+                'Not all payments of %(member)s can be fully utilised.'
             )
 
-    def overpayment_error_params(self, debt_key, total_used, total_credit): 
+        return ' '.join(
+            (
+                specific,
+                str(bulk_utils.CreditApportionmentMixin.overpayment_fmt_string),
+                self.refund_message
+             )
+        )
+
+    def overpayment_error_params(self, debt_key, *args):
+
+        params = super().overpayment_error_params(debt_key, *args)
         if self.filtered_mode:
             member_id, filter_slug = debt_key
-            return {
-                'member': str(self.get_member(pk=member_id)),
-                'filter_slug': filter_slug,
-                'total_used': total_used,
-                'total_credit': total_credit
-            }
+            params['member'] = str(self.get_member(pk=member_id))
+            params['filter_slug'] = filter_slug
         else:
-            return {
-                'member': str(self.get_member(pk=debt_key)),
-                'total_used': total_used,
-                'total_credit': total_credit
-            }
+            params['member'] = str(self.get_member(pk=debt_key))
+        return params
 
     def transaction_buckets(self):
         # if there are no filters present, we can simply go by

@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from django.shortcuts import render
 from django.utils.translation import (
-    ugettext_lazy as _,
+    ugettext_lazy as _, ugettext,
 )
 
 from . import internal, bulk_utils
@@ -119,18 +119,25 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
         'Resolution: likely duplicate, skipped processing.'
     )
 
-    overpayment_fmt_string = _(
-        'Not all bank transfer payments of %(member)s can be fully utilised. '
-        'Received %(total_credit)s, but only %(total_used)s '
-        'can be applied to outstanding debts.'
-    )
+    @property
+    def overpayment_fmt_string(self):
 
-    def overpayment_error_params(self, debt_key, total_used, total_credit): 
-        return {
-            'member': str(self._members_by_id[debt_key]),
-            'total_used': total_used,
-            'total_credit': total_credit
-        }
+        return ' '.join(
+            (
+
+                ugettext(
+                    'Not all bank transfer payments of %(member)s '
+                    'can be fully utilised. '
+                ),
+                str(bulk_utils.CreditApportionmentMixin.overpayment_fmt_string),
+                self.refund_message
+            )
+        )
+
+    def overpayment_error_params(self, debt_key, *args):
+        params = super().overpayment_error_params(debt_key, *args)
+        params['member'] = str(self._members_by_id[debt_key])
+        return params
 
     def dup_error_params(self, signature_used):
         # TODO: don't use magic numbers that depend on the order of

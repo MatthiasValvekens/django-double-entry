@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import (
     ugettext_lazy as _,
+    ugettext,
 )
 from djmoney.money import Money
 
@@ -492,10 +493,8 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
         debt_fk_name = split_model.get_debt_column()
 
     results = ApportionmentResult(
-        fully_used_payments=[],
-        fully_paid_debts=[],
-        remaining_payments=[],
-        remaining_debts=[]
+        fully_used_payments=[], fully_paid_debts=[],
+        remaining_payments=[], remaining_debts=[],
     )
 
     # There might be a more efficient way, but let's not optimise prematurely
@@ -563,6 +562,9 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
             # all debts fully paid back, bail
             if credit_remaining:
                 results.remaining_payments.append(payment)
+            results.remaining_payments.extend(
+                p for p in payments_iter if p.credit_remaining
+            )
             break
 
         try:
@@ -582,6 +584,9 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
             # no money left to pay stuff, bail
             if debt_remaining:
                 results.remaining_debts.append(debt)
+            results.remaining_debts.extend(
+                d for d in debts_iter if d.balance
+            )
             break
         # pay off as much of the current debt as we can
         # with the current balance
@@ -597,7 +602,13 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
 
 class CreditApportionmentMixin(LedgerEntryPreparator):
     split_model = None
-    overpayment_fmt_string = None
+
+    overpayment_fmt_string = _(
+        'Received %(total_credit)s, but only %(total_used)s '
+        'can be applied to outstanding debts. '
+        'Payment(s) dated %(payment_dates)s have outstanding '
+        'balances.'
+    )
 
     # optional, can be derived through reflection
     payment_fk_name = None
@@ -610,19 +621,65 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
     def transaction_buckets(self):
         raise NotImplementedError
 
-    def overpayment_error_params(self, debt_key, total_used, total_credit): 
+    def overpayment_error_params(self, debt_key, total_used,
+                                 total_credit, remaining_payments):
         return {
-            'debt_key': debt_key,
             'total_used': total_used,
-            'total_credit': total_credit
+            'total_credit': total_credit,
+            'remaining_payments': remaining_payments,
+            'payment_dates': ', '.join(
+                p.timestamp.strftime('%Y-%m-%d') for p in remaining_payments
+            )
         }
 
-    def make_splits(self, payments, debts):
-        return make_payment_splits(
-            payments, debts, self.split_model, 
-            payment_fk_name=self.payment_fk_name,
-            debt_fk_name=self.debt_fk_name
+    @property
+    def refund_message(self):
+        if settings.AUTOGENERATE_REFUNDS:
+            return ugettext(
+                'Refunds will be automatically created to compensate '
+                'for the difference in funds. '
+                'Please process these at your earliest convenience.'
+            )
+        else:
+            return ugettext(
+                'Please resolve this issue manually.'
+            )
+
+    def simulate_apportionments(self, debt_key, debts, transactions):
+        payments = sorted([
+                t.ledger_entry for t in transactions
+            ],
+            key=lambda p: p.timestamp
         )
+
+        results: ApportionmentResult
+        def _split_gen_wrapper():
+            nonlocal results
+            results = yield from make_payment_splits(
+                payments, debts, self.split_model,
+                payment_fk_name=self.payment_fk_name,
+                debt_fk_name=self.debt_fk_name
+            )
+
+        total_used = sum(
+            (s.amount for s in _split_gen_wrapper()),
+            Money(0, settings.BOOKKEEPING_CURRENCY)
+        )
+
+        total_credit = sum(
+            (p.total_amount for p in payments),
+            Money(0, settings.BOOKKEEPING_CURRENCY)
+        )
+
+        if total_used < total_credit:
+            self.error_at_lines(
+                [t.line_no for t in transactions],
+                self.overpayment_fmt_string,
+                params=self.overpayment_error_params(
+                    debt_key, total_used, total_credit,
+                    results.remaining_payments
+                )
+            )
 
     def review(self):
         super().review()
@@ -630,34 +687,8 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
         # credit established, and notify the treasurer
         self._trans_buckets = self.transaction_buckets()
         for key, transactions in self._trans_buckets.items():
-            debts = self.debts_for(key) 
-            payments = sorted([
-                    t.ledger_entry for t in transactions
-                ], 
-                key=lambda p: p.timestamp
-            )
-            splits = self.make_splits(payments, debts)
-            total_used = sum(
-                (s.amount for s in splits),
-                Money(0, settings.BOOKKEEPING_CURRENCY)
-            )
-            total_credit = sum(
-                (p.total_amount for p in payments),
-                Money(0, settings.BOOKKEEPING_CURRENCY)
-            )
-            if total_used < total_credit:
-                self.error_at_lines(
-                    [t.line_no for t in transactions],
-                    self.overpayment_fmt_string,
-                    params=self.overpayment_error_params(
-                        key, total_used, total_credit
-                    )
-                )
-                # TODO: figure out how to deal with refunds here
-                # I'm convinced again that having a to_refund account in gnucash
-                # is the best way to deal with this, but we need to
-                # have a qif_excluded field on payments in case the treasurer
-                # wants to deal with these things manually
+            debts = self.debts_for(key)
+            self.simulate_apportionments(key, debts, transactions)
 
 
 class FinancialCSVUploadForm(CSVUploadForm):
