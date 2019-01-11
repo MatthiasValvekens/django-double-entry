@@ -40,7 +40,7 @@ def nonzero_money_validator(money):
         )
 
 
-class DoubleBookModel(models.Model):
+class DoubleBookInterface(models.Model):
     """
     One half of a ledger in a double-entry accounting system.
     """
@@ -66,20 +66,8 @@ class DoubleBookModel(models.Model):
     _other_half_model = None
     _fresh = False
 
-    timestamp = models.DateTimeField(
-        verbose_name=pgettext_lazy(
-            'accounting', 'transaction timestamp'
-        ),
-        default=timezone.now
-    )
-
-    processed = models.DateTimeField(
-        verbose_name=pgettext_lazy(
-            'accounting', 'processing timestamp'
-        ),
-        default=timezone.now,
-        editable=False
-    )
+    timestamp = None
+    processed = None
 
     class Meta:
         abstract = True
@@ -219,16 +207,36 @@ class DoubleBookModel(models.Model):
         super().save(**kwargs)
 
 
-# TODO: I would love for this to be an abstract subclass of 
-# our base double-ledger model, but Django complains about field clashes.
-# Probably the diamond pattern is not fully supported yet, or this is a bug.
-# Needs further digging.
-class DuplicationProtectionMixin:
+class DoubleBookModel(DoubleBookInterface):
+
+    timestamp = models.DateTimeField(
+        verbose_name=pgettext_lazy(
+            'accounting', 'transaction timestamp'
+        ),
+        default=timezone.now
+    )
+
+    processed = models.DateTimeField(
+        verbose_name=pgettext_lazy(
+            'accounting', 'processing timestamp'
+        ),
+        default=timezone.now,
+        editable=False
+    )
+
+    class Meta:
+        abstract = True
+
+
+class DuplicationProtectionMixin(DoubleBookInterface):
     """
     Specify fields to be used in the duplicate checker on bulk imports.
     The fields `timestamp` and `total_amount` are implicit.
     """
     dupcheck_signature_fields = None
+
+    class Meta:
+        abstract = True
 
     @property
     def dupcheck_signature(self):
