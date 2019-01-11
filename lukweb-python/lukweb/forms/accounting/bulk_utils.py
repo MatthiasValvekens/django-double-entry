@@ -2,7 +2,8 @@ import datetime
 import logging
 from csv import DictReader
 from decimal import Decimal, DecimalException
-from collections import defaultdict
+from collections import defaultdict, namedtuple, deque
+from typing import TypeVar, Sequence, Generator, Type
 
 from django import forms
 from django.conf import settings
@@ -16,6 +17,7 @@ from django.utils.translation import (
 from djmoney.money import Money
 
 from ... import models
+from ...models.accounting import base as accounting_base
 from ...utils import _dt_fallback
 from ..utils import ParserErrorMixin, CSVUploadForm
 
@@ -457,6 +459,142 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
         }
 
 
+ApportionmentResult = namedtuple(
+    'ApportionmentResult', (
+        'fully_used_payments',
+        'fully_paid_debts',
+        'remaining_payments',
+        'remaining_debts'
+    )
+)
+
+
+ST = TypeVar('ST', bound=accounting_base.BaseDebtPaymentSplit)
+def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
+                        debts: Sequence[accounting_base.BaseDebtRecord],
+                        split_model: Type[ST],
+                        prioritise_exact_amount_match=True,
+                        exact_amount_match_only=False,
+                        payment_fk_name: str=None, debt_fk_name: str=None) \
+        -> Generator[ST, None, ApportionmentResult]:
+    """
+    This method assumes that there are no preexistent splits between
+    the payments and debts involved in the computation.
+    Ensure that the payments and debts are appropriately annotated for
+    optimal results.
+    """
+
+    # use double-ledger introspection to figure out the right foreign
+    # key names
+    if payment_fk_name is None:
+        payment_fk_name = split_model.get_payment_column()
+    if debt_fk_name is None:
+        debt_fk_name = split_model.get_debt_column()
+
+    results = ApportionmentResult(
+        fully_used_payments=[],
+        fully_paid_debts=[],
+        remaining_payments=[],
+        remaining_debts=[]
+    )
+
+    # There might be a more efficient way, but let's not optimise prematurely
+    if prioritise_exact_amount_match or exact_amount_match_only:
+        payment_list = list(payments)
+        debt_list = deque(debts)
+        payments_todo = []
+        for payment in payment_list:
+            try:
+                amt = payment.credit_remaining
+                # attempt to find a debt matching the exact payment amount
+                index, exact_match = next(
+                    (ix, d) for ix, d in enumerate(debt_list)
+                    if d.balance == amt and d.timestamp <= payment.timestamp
+                )
+                # remove debt from the candidate list
+                # this triggers another O(n) read, which feels like
+                # it should be unnecessary, but it doesn't really matter
+                del debt_list[index]
+
+                # yield payment split covering this transaction
+                yield split_model(**{
+                    payment_fk_name: payment, debt_fk_name: exact_match,
+                    'amount': amt
+                })
+                results.fully_used_payments.append(payment)
+                results.fully_paid_debts.append(exact_match)
+            except StopIteration:
+                # no exact match, so defer handling
+                payments_todo.append(payment)
+
+        debts_iter = iter(debt_list)
+        payments_iter = iter(payments_todo)
+    else:
+        payments_iter = iter(payments)
+        debts_iter = iter(debts)
+
+    if exact_amount_match_only:
+        results.remaining_debts.extend(debts_iter)
+        results.remaining_payments.extend(payments_iter)
+        return results
+
+    # The generic method is simple: use payments to pay off debts
+    # until we either run out of debts, or of money to pay 'em
+    payment = debt = None
+    # credit remaining on the current payment
+    # and portion of the current debt that still needs to be paid
+    # (during this payment run)
+
+    # The only subtlety is in enforcing the invariant
+    # that debts cannot be retroactively paid off by past payments.
+    # By ordering the payments and debts from old to new, we can easily
+    # ensure that this happens.
+    credit_remaining = debt_remaining = 0
+    while True:
+        try:
+            # look for some unpaid debt
+            while not debt_remaining:
+                if debt is not None:  # initial step guard
+                    # report debt as fully paid
+                    results.fully_paid_debts.append(debt)
+                debt = next(debts_iter)
+                debt_remaining = debt.balance
+        except StopIteration:
+            # all debts fully paid back, bail
+            if credit_remaining:
+                results.remaining_payments.append(payment)
+            break
+
+        try:
+            # keep trying payments until we find one that is recent enough
+            # to cover the current debt.
+            while not credit_remaining or payment.timestamp < debt.timestamp:
+                if payment is not None:  # initial step guard
+                    # report on payment status
+                    if credit_remaining:
+                        results.remaining_payments.append(payment)
+                    else:
+                        results.fully_used_payments.append(payment)
+                payment = next(payments_iter)
+                credit_remaining = payment.credit_remaining
+
+        except StopIteration:
+            # no money left to pay stuff, bail
+            if debt_remaining:
+                results.remaining_debts.append(debt)
+            break
+        # pay off as much of the current debt as we can
+        # with the current balance
+        amt = min(debt_remaining, credit_remaining)
+        credit_remaining -= amt
+        debt_remaining -= amt
+        yield split_model(**{
+            payment_fk_name: payment, debt_fk_name: debt, 'amount': amt
+        })
+
+    return results
+
+
 class CreditApportionmentMixin(LedgerEntryPreparator):
     split_model = None
     overpayment_fmt_string = None
@@ -480,7 +618,6 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
         }
 
     def make_splits(self, payments, debts):
-        from ...payments import make_payment_splits
         return make_payment_splits(
             payments, debts, self.split_model, 
             payment_fk_name=self.payment_fk_name,

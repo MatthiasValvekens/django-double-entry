@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from decimal import Decimal
 from itertools import chain
 
 from django import forms
@@ -14,9 +15,12 @@ from django.utils.translation import (
 
 from . import bulk_utils
 from .base import *
-from .bulk_utils import MemberTransactionParser, PaymentCSVParser
+from .bulk_utils import (
+    MemberTransactionParser, PaymentCSVParser, make_payment_splits
+)
 from .utils import GnuCashFieldMixin
-from ... import payments, models
+from ... import models
+from ...payments import PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER
 from ...widgets import (
     DatalistInputWidget, MoneyWidget,
 )
@@ -211,7 +215,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                         'payment import. This shouldn\'t happen without '
                         'tampering.'
                     )
-                yield from payments.make_payment_splits(
+                yield from make_payment_splits(
                     payments=sorted(pmts, key=lambda p: p.timestamp),
                     debts=debts_by_filter[filter_slug],
                     split_model=models.InternalPaymentSplit
@@ -219,7 +223,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
 
         def unfiltered(member):
             member_payments = payments_by_member[member.pk][None]
-            return payments.make_payment_splits(
+            return make_payment_splits(
                 payments=sorted(member_payments, key=lambda p: p.timestamp),
                 debts=member.debts.unpaid().order_by('timestamp'),
                 split_model=models.InternalPaymentSplit
@@ -229,10 +233,11 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
 
         # save payments before building splits, otherwise the ORM
         # will not set fk's correctly
+        def all_payments():
+            for payment_set in payments_by_member.values():
+                yield from chain(*iter(payment_set.values()))
+
         if commit:
-            def all_payments():
-                for payment_set in payments_by_member.values():
-                    yield from chain(*iter(payment_set.values()))
 
             if can_bulk_save:
                 models.InternalPayment.objects.bulk_create(all_payments())
@@ -251,7 +256,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
         if commit:
             models.InternalPaymentSplit.objects.bulk_create(splits_to_create)
 
-        return payments
+        return all_payments()
 
 
 BulkPaymentFormSet = modelformset_factory(
@@ -274,11 +279,11 @@ class MiscDebtPaymentCSVParser(PaymentCSVParser, MemberTransactionParser):
             self.debt_filter = debt_filter
 
     def get_nature(self, line_no, row): 
-        nature = row.get(self.nature_column_name, payments.PAYMENT_NATURE_CASH)
+        nature = row.get(self.nature_column_name, PAYMENT_NATURE_CASH)
         if nature in ('bank', 'overschrijving'):
-            nature = payments.PAYMENT_NATURE_TRANSFER
+            nature = PAYMENT_NATURE_TRANSFER
         else:
-            nature = payments.PAYMENT_NATURE_CASH
+            nature = PAYMENT_NATURE_CASH
         return nature
 
     # required columns: lid, bedrag
@@ -504,3 +509,42 @@ class InternalPaymentSplitFormSet(InlineTransactionSplitFormSet):
         else:
             raise TypeError
         return qs
+
+
+def recompute_payment_splits(payments, debt_filter=None, **kwargs):
+    """
+    WARNING: this function is not intended for normal usage
+    and typically destroys .qif consistency. Use only if you know
+    what you're doing.
+    """
+    from ...models import InternalPaymentSplit, ChoirMember
+    from ...models.accounting.base import DoubleBookQuerySet
+    from django.db import transaction
+
+    payments_by_member = defaultdict(list)
+    for p in payments:
+        # saves us two completely pointless queries later
+        payments_by_member[p.member_id].append(p)
+        setattr(p, DoubleBookQuerySet.MATCHED_BALANCE_FIELD, Decimal('0.00'))
+
+    members = ChoirMember.objects.filter(
+        pk__in=payments_by_member.keys()
+    ).with_debts_and_payments()
+
+    with transaction.atomic():
+        # delete old splits
+        InternalPaymentSplit.objects.filter(
+            payment_id__in=[p.pk for p in payments]
+        ).delete()
+
+        def splits_to_create():
+            for member in members:
+                # pull up unpaid debts
+                debts = member.debts.unpaid().order_by('timestamp')
+                if debt_filter is not None:
+                    debts = debts.filter(debt_filter)
+                yield from make_payment_splits(
+                    payments_by_member[member.pk], debts,
+                    InternalPaymentSplit, **kwargs
+                )
+        InternalPaymentSplit.objects.bulk_create(splits_to_create())
