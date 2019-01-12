@@ -166,14 +166,25 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
             return_value = "WEBSITE_ERROR"
         return return_value
 
+    def get_comment_display(self):
+        if self.comment:
+            return self.comment
+        elif self.is_refund:
+            return _('<refund/unmanaged debt>')
+        elif self.activity_participation is not None:
+            return str(self.activity_participation.activity)
+        else:
+            return ''
+
     @cached_property
     def gnucash_memo(self):
-        if self.comment:
-            return_val = self.comment
-        elif self.activity_participation is not None:
-            return_val = str(self.activity_participation.activity)
-        else:
-            logger.error("Could not find a memo name for payment")
+        return_val = self.get_comment_display()
+        if not return_val:
+            logger.error(
+                "Could not find a memo name for payment with id %s." % (
+                    self.pk
+                )
+            )
             return_val = "WEBSITE ERROR: NO MEMO FOUND"
         return return_val
 
@@ -185,7 +196,7 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
             'date': timezone.localdate(self.timestamp),
             'balance': self.balance,
             'total': self.total_amount,
-            'comment': self.comment,
+            'comment': self.get_comment_display()
         }
 
     def __str__(self):

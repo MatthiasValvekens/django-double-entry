@@ -3,7 +3,9 @@ import logging
 from csv import DictReader
 from decimal import Decimal, DecimalException
 from collections import defaultdict, namedtuple, deque
-from typing import TypeVar, Sequence, Generator, Type
+from typing import (
+    TypeVar, Sequence, Generator, Type, Tuple, Iterator, Optional,
+)
 
 from django import forms
 from django.conf import settings
@@ -17,6 +19,7 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
+from lukweb.payments import decimal_to_money
 from ... import models
 from ...models.accounting import base as accounting_base
 from ...utils import _dt_fallback
@@ -509,6 +512,7 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
                 index, exact_match = next(
                     (ix, d) for ix, d in enumerate(debt_list)
                     if d.balance == amt and d.timestamp <= payment.timestamp
+                    and not d.is_refund
                 )
                 # remove debt from the candidate list
                 # this triggers another O(n) read, which feels like
@@ -548,23 +552,31 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
     # that debts cannot be retroactively paid off by past payments.
     # By ordering the payments and debts from old to new, we can easily
     # ensure that this happens.
-    credit_remaining = debt_remaining = 0
+    credit_remaining = debt_remaining = decimal_to_money(Decimal('0.00'))
     while True:
         try:
             # look for some unpaid debt
-            while not debt_remaining:
+            while not debt_remaining or debt.is_refund:
                 if debt is not None:  # initial step guard
-                    # report debt as fully paid
-                    results.fully_paid_debts.append(debt)
+                    if not debt_remaining:
+                        # report debt as fully paid
+                        results.fully_paid_debts.append(debt)
+                    else:
+                        # this shouldn't happen, but let's
+                        # cover our collective asses
+                        results.remaining_debts.append(debt)
                 debt = next(debts_iter)
                 debt_remaining = debt.balance
         except StopIteration:
             # all debts fully paid back, bail
             if credit_remaining:
+                payment.spoof_matched_balance(credit_remaining.amount)
                 results.remaining_payments.append(payment)
-            results.remaining_payments.extend(
-                p for p in payments_iter if p.credit_remaining
-            )
+            for p in payments_iter:
+                if p.credit_remaining:
+                    results.remaining_payments.append(p)
+                else:
+                    results.fully_used_payments.append(p)
             break
 
         try:
@@ -583,10 +595,13 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
         except StopIteration:
             # no money left to pay stuff, bail
             if debt_remaining:
+                debt.spoof_matched_balance(debt_remaining.amount)
                 results.remaining_debts.append(debt)
-            results.remaining_debts.extend(
-                d for d in debts_iter if d.balance
-            )
+            for d in debts_iter:
+                if d.balance:
+                    results.remaining_debts.append(d)
+                else:
+                    results.fully_paid_debts.append(d)
             break
         # pay off as much of the current debt as we can
         # with the current balance
@@ -598,6 +613,55 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
         })
 
     return results
+
+
+def refund_overpayment(
+        payments: Sequence[accounting_base.BasePaymentRecord],
+        debt_kwargs: dict=None
+    ) -> Optional[
+        Tuple[
+            accounting_base.BaseDebtRecord,
+            Iterator[accounting_base.BaseDebtPaymentSplit]
+        ]
+    ]:
+
+    payments = list(payments)
+    if not payments:
+        return
+    p = payments[0]
+    payment_model = p.__class__
+    split_model, payment_fk_name = payment_model.get_split_model()
+    debt_model = p.__class__.get_other_half_model()
+    debt_fk_name = split_model.get_debt_column()
+
+    credit_to_refund = sum(
+        (payment.credit_remaining for payment in payments),
+        decimal_to_money(Decimal('0.00'))
+    )
+
+    if not credit_to_refund:
+        return
+
+    now = timezone.now()
+    kwargs = {'timestamp': now, 'processed': now}
+    if debt_kwargs is not None:
+        kwargs.update(debt_kwargs)
+    kwargs['is_refund'] = True
+    kwargs[debt_model.TOTAL_AMOUNT_FIELD_NAME] = credit_to_refund
+    refund_object = debt_model(**kwargs)
+
+    # this generator should be triggered by the caller when
+    # the refund_object and all payments have been saved.
+    def splits_to_create():
+        for payment in payments:
+            if payment.credit_remaining:
+                yield split_model(**{
+                    payment_fk_name: payment, debt_fk_name: refund_object,
+                    'amount': credit_to_refund
+                })
+
+    return refund_object, splits_to_create()
+
 
 
 class CreditApportionmentMixin(LedgerEntryPreparator):

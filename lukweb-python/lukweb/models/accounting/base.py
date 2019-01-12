@@ -2,6 +2,7 @@ import logging
 import datetime
 from decimal import Decimal
 from collections import defaultdict
+from typing import Type, Tuple, cast
 
 from django.db import models
 from django.db.models import (
@@ -64,7 +65,6 @@ class DoubleBookInterface(models.Model):
     _split_model = None
     _remote_target_field = None
     _other_half_model = None
-    _fresh = False
 
     timestamp = None
     processed = None
@@ -130,13 +130,13 @@ class DoubleBookInterface(models.Model):
             cls._other_half_model = split_fk_1.related_model
 
     @classmethod
-    def get_split_model(cls):
+    def get_split_model(cls) -> Tuple[Type['BaseTransactionSplit'], str]:
         if cls._split_model is None:
             cls._prepare_split_metadata()
         return cls._split_model, cls._remote_target_field
 
     @classmethod
-    def get_other_half_model(cls):
+    def get_other_half_model(cls) -> Type['DoubleBookInterface']:
         if cls._other_half_model is None:
             cls._prepare_split_metadata()
         return cls._other_half_model
@@ -158,7 +158,7 @@ class DoubleBookInterface(models.Model):
             # a record that is not in the DB yet is by definition 
             # completely unmatched. If it is freshly saved, the 
             # same should apply.
-            if self.pk is None or self._fresh:
+            if self.pk is None:
                 return decimal_to_money(Decimal('0.00'))
             logger.debug(
                 'PERFORMANCE WARNING: '
@@ -178,6 +178,16 @@ class DoubleBookInterface(models.Model):
                     )
                 )['a']
             )
+
+    def spoof_matched_balance(self, amount):
+        setattr(
+            self, DoubleBookQuerySet.MATCHED_BALANCE_FIELD, amount
+        )
+        try:
+            # invalidate cache
+            del self.__dict__['matched_balance']
+        except KeyError:
+            pass
 
     @cached_property
     def unmatched_balance(self):
@@ -202,8 +212,9 @@ class DoubleBookInterface(models.Model):
 
     def save(self, **kwargs):
         # 'remember' when saving a new object
-        if self.pk is None:
-            self._fresh = True
+        balance_set = hasattr(self, DoubleBookQuerySet.MATCHED_BALANCE_FIELD)
+        if self.pk is None and not balance_set:
+            self.spoof_matched_balance(Decimal('0.00'))
         super().save(**kwargs)
 
 
@@ -390,7 +401,7 @@ class DuplicationProtectedQuerySet(DoubleBookQuerySet):
 
         return historical_buckets 
 
-# for semantic consistency and backwards compatibility
+# mainly for semantic consistency and backwards compatibility
 class BaseDebtQuerySet(DoubleBookQuerySet):
     
     def with_payments(self):
@@ -417,6 +428,29 @@ class BasePaymentQuerySet(DoubleBookQuerySet):
 
 class BaseDebtRecord(BaseFinancialRecord):
 
+    @classmethod
+    def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
+        return cast(
+            Tuple[Type['BaseDebtPaymentSplit'], str], super().get_split_model()
+        )
+
+    @classmethod
+    def get_other_half_model(cls) -> Type['BasePaymentRecord']:
+        return cast(
+            Type['BasePaymentRecord'], super().get_other_half_model()
+        )
+
+    is_refund = models.BooleanField(
+        verbose_name=_('Refund/unmanaged'),
+        help_text=_(
+            'Flag indicating whether this debt record represents an '
+            'overpayment refund or an unmanaged debt, rather than '
+            'an actual debt record.'
+        ),
+        default=False,
+        editable=False
+    )
+
     objects = BaseDebtQuerySet.as_manager()
 
     class Meta:
@@ -437,20 +471,32 @@ class BaseDebtRecord(BaseFinancialRecord):
 
 class BasePaymentRecord(BaseFinancialRecord):
 
+    @classmethod
+    def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
+        return cast(
+            Tuple[Type['BaseDebtPaymentSplit'], str], super().get_split_model()
+        )
+
+    @classmethod
+    def get_other_half_model(cls) -> Type['BaseDebtRecord']:
+        return cast(
+            Type['BaseDebtRecord'], super().get_other_half_model()
+        )
+
     objects = BasePaymentQuerySet.as_manager()
 
     class Meta:
         abstract = True
 
-    @cached_property
+    @property
     def credit_used(self):
         return self.matched_balance
 
-    @cached_property
+    @property
     def credit_remaining(self):
         return self.unmatched_balance
 
-    @cached_property
+    @property
     def fully_used(self):
         return self.fully_matched
     
@@ -531,7 +577,7 @@ class BaseDebtPaymentSplit(BaseTransactionSplit):
         payment = getattr(self, cls.get_payment_column())
         debt = getattr(self, cls.get_debt_column())
 
-        if payment.timestamp < debt.timestamp:
+        if payment.timestamp < debt.timestamp and not debt.is_refund:
             def loctimefmt(ts):
                 return timezone.localtime(ts).strftime(
                     '%Y-%m-%d %H:%M:%S'
