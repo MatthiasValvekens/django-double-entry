@@ -1,5 +1,4 @@
 import logging
-import re
 from collections import defaultdict
 
 from django.conf import settings
@@ -13,9 +12,7 @@ from ... import payments, models
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    'BankCSVParser', 'FortisCSVParser', 'BulkTransferUploadForm'
-]
+__all__ = ['BulkTransferUploadForm']
 
 
 # TODO: implement parser switching in globals
@@ -23,94 +20,10 @@ __all__ = [
 # TODO: clearly document parsers
 # TODO: delimiter autodetection
 
-class BankCSVParser(bulk_utils.PaymentCSVParser):
-
-    verbose_name = None
-
-    class TransactionInfo(bulk_utils.PaymentCSVParser.TransactionInfo): 
-        def __init__(self, *, ogm, **kwargs):
-            super().__init__(**kwargs)
-            self.ogm = ogm
-
-    def get_nature(self, line_no, row):
-        return payments.PAYMENT_NATURE_TRANSFER
-
-    def get_ogm(self, line_no, row):
-        raise NotImplementedError
-
-    def parse_row_to_dict(self, line_no, row):
-        parsed = super().parse_row_to_dict(line_no, row)
-        ogm = self.get_ogm(line_no, row)
-        if ogm is None:
-            return None
-        parsed['ogm'] = ogm
-        return parsed
-
 
 # lookbehind doesn't work, since we don't want to constrain the
 # prefix to a fixed length
-FORTIS_FIND_OGM = r'MEDEDELING\s*:\s+' + payments.OGM_REGEX
-FORTIS_SEARCH_PATTERN = re.compile(FORTIS_FIND_OGM)
 
-
-class FortisCSVParser(BankCSVParser):
-    delimiter = ';'
-
-    # TODO: force all relevant columns to be present here
-    amount_column_name = 'Bedrag'
-    date_column_name = 'Uitvoeringsdatum'
-    verbose_name = _('Fortis .csv parser')
-
-    def get_ogm(self, line_no, row):
-        m = FORTIS_SEARCH_PATTERN.search(row['Details'])
-        if m is None:
-            return None
-        ogm_str = m.group(0)
-        try:
-            prefix, modulus = payments.parse_ogm(ogm_str, match=m)
-        except (ValueError, TypeError):
-            self.error(
-                line_no, 
-                _('Illegal OGM string %(ogm)s.') % {
-                    'ogm': ogm_str
-                }
-            )
-            return None
-
-        ogm_canonical = payments.ogm_from_prefix(prefix)
-        return ogm_canonical
-
-
-class KBCCSVParser(BankCSVParser):
-    # The inconsistent capitalisation in column names
-    # is *not* a typo on my part.
-    delimiter = ';'
-    verbose_name = _('KBC .csv parser')
-
-    # we're using this for incoming transactions, so this is fine
-    amount_column_name = 'credit'
-    date_column_name = 'Datum'
-
-    def get_ogm(self, line_no, row):
-        ogm_str = row.get('gestructureerde mededeling', '').strip()
-        if not ogm_str:
-            # Always assume that there will be simpletons who don't know the
-            ogm_str = row.get('Vrije mededeling', '').strip()
-        try:
-            prefix, modulus = payments.parse_ogm(ogm_str)
-        except (ValueError, TypeError):
-            self.error(
-                line_no,
-                _('Illegal OGM string %(ogm)s.') % {
-                    'ogm': ogm_str
-                }
-            )
-            return None
-
-        ogm_canonical = payments.ogm_from_prefix(prefix)
-        return ogm_canonical
-
-PARSER_REGISTRY = [FortisCSVParser, KBCCSVParser]
 
 class TransferRecordPreparator(bulk_utils.LedgerEntryPreparator):
     
@@ -267,8 +180,12 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
 
 class BulkTransferUploadForm(bulk_utils.FinancialCSVUploadForm):
     ledger_preparator_classes = (DebtTransferPaymentPreparator,)
-    csv_parser_class = FortisCSVParser
     upload_field_label = _('Electronic transfers (.csv)')
+
+    @property
+    def csv_parser_class(self):
+        financial_globals = models.FinancialGlobals.load()
+        return financial_globals.bank_csv_parser_class
 
     def render_confirmation_page(self, request, context=None):
         context = context or {}

@@ -10,7 +10,6 @@ from django.core.exceptions import SuspiciousOperation
 from django.db.models import Q
 from django.forms.models import ModelForm, modelformset_factory
 from django.shortcuts import render
-from django.utils.text import slugify
 from django.utils.translation import (
     ugettext_lazy as _, ugettext
 )
@@ -18,11 +17,11 @@ from django.utils.translation import (
 from . import bulk_utils
 from .base import *
 from .bulk_utils import (
-    MemberTransactionParser, PaymentCSVParser, make_payment_splits
+    make_payment_splits
 )
+from ...payments import (DebtCSVParser, MiscDebtPaymentCSVParser)
 from .utils import GnuCashFieldMixin
 from ... import models
-from ...payments import PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER
 from ...widgets import (
     DatalistInputWidget, MoneyWidget,
 )
@@ -301,53 +300,6 @@ BulkPaymentFormSet = modelformset_factory(
 )
 
 
-class MiscDebtPaymentCSVParser(PaymentCSVParser, MemberTransactionParser):
-    delimiter = ';'
-    nature_column_name = 'aard'
-    filter_column_name = 'filter'
-    filters_present = False
-
-    class TransactionInfo(PaymentCSVParser.TransactionInfo, 
-                          MemberTransactionParser.TransactionInfo):
-        def __init__(self, *, debt_filter=None, **kwargs):
-            super().__init__(**kwargs)
-            self.debt_filter = debt_filter
-
-    def get_nature(self, line_no, row): 
-        nature = row.get(self.nature_column_name, PAYMENT_NATURE_CASH)
-        if nature in ('bank', 'overschrijving'):
-            nature = PAYMENT_NATURE_TRANSFER
-        else:
-            nature = PAYMENT_NATURE_CASH
-        return nature
-
-    # required columns: lid, bedrag
-    # optional columns: datum, aard, filter
-    # filter column requires a value if supplied!
-    def parse_row_to_dict(self, line_no, row):
-        parsed = super().parse_row_to_dict(line_no, row)
-        try:
-            debt_filter = slugify(row[self.filter_column_name])
-            if not debt_filter:
-                self.error(
-                    line_no, _(
-                        'You must supply a filter value for all payments in '
-                        '\'Misc. internal debt payments\', or omit the '
-                        '\'%(colname)s\' column entirely. '
-                        'Skipped processing.'
-                    ) % {'colname': self.filter_column_name}
-                )
-                return None
-            else:
-                parsed['debt_filter'] = debt_filter
-                self.filters_present = True
-        except KeyError:
-            # proceed as normal
-            pass
-
-        return parsed
-
-
 class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
                                 bulk_utils.DuplicationProtectedPreparator,
                                 bulk_utils.CreditApportionmentMixin):
@@ -482,28 +434,6 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
     
     def debts_for(self, debt_key):
         return self._debt_buckets[debt_key]
-
-
-class DebtCSVParser(MemberTransactionParser):
-    delimiter = ';'
-
-    comment_column_name = 'mededeling'
-    gnucash_column_name = 'gnucash'
-
-    class TransactionInfo(MemberTransactionParser.TransactionInfo): 
-        def __init__(self, *, comment, gnucash, filter_slug, **kwargs):
-            super().__init__(**kwargs)
-            self.comment = comment
-            self.gnucash = gnucash
-            self.filter_slug = filter_slug
-
-    def parse_row_to_dict(self, line_no, row):
-        parsed = super().parse_row_to_dict(line_no, row)
-        parsed['comment'] = row[self.comment_column_name]
-        parsed['gnucash'] = row[self.gnucash_column_name]
-        # coerce falsy values
-        parsed['filter_slug'] = slugify(row.get('filter', '')) or None
-        return parsed
 
 
 class BulkDebtUploadForm(bulk_utils.FinancialCSVUploadForm):
