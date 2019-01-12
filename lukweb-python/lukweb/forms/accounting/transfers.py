@@ -18,13 +18,15 @@ __all__ = [
 ]
 
 
-# TODO: implement KBC parser
 # TODO: implement parser switching in globals
+# TODO: case-insensitive column names
 # TODO: clearly document parsers
 # TODO: delimiter autodetection
 
 class BankCSVParser(bulk_utils.PaymentCSVParser):
-    
+
+    verbose_name = None
+
     class TransactionInfo(bulk_utils.PaymentCSVParser.TransactionInfo): 
         def __init__(self, *, ogm, **kwargs):
             super().__init__(**kwargs)
@@ -57,6 +59,7 @@ class FortisCSVParser(BankCSVParser):
     # TODO: force all relevant columns to be present here
     amount_column_name = 'Bedrag'
     date_column_name = 'Uitvoeringsdatum'
+    verbose_name = _('Fortis .csv parser')
 
     def get_ogm(self, line_no, row):
         m = FORTIS_SEARCH_PATTERN.search(row['Details'])
@@ -77,6 +80,37 @@ class FortisCSVParser(BankCSVParser):
         ogm_canonical = payments.ogm_from_prefix(prefix)
         return ogm_canonical
 
+
+class KBCCSVParser(BankCSVParser):
+    # The inconsistent capitalisation in column names
+    # is *not* a typo on my part.
+    delimiter = ';'
+    verbose_name = _('KBC .csv parser')
+
+    # we're using this for incoming transactions, so this is fine
+    amount_column_name = 'credit'
+    date_column_name = 'Datum'
+
+    def get_ogm(self, line_no, row):
+        ogm_str = row.get('gestructureerde mededeling', '').strip()
+        if not ogm_str:
+            # Always assume that there will be simpletons who don't know the
+            ogm_str = row.get('Vrije mededeling', '').strip()
+        try:
+            prefix, modulus = payments.parse_ogm(ogm_str)
+        except (ValueError, TypeError):
+            self.error(
+                line_no,
+                _('Illegal OGM string %(ogm)s.') % {
+                    'ogm': ogm_str
+                }
+            )
+            return None
+
+        ogm_canonical = payments.ogm_from_prefix(prefix)
+        return ogm_canonical
+
+PARSER_REGISTRY = [FortisCSVParser, KBCCSVParser]
 
 class TransferRecordPreparator(bulk_utils.LedgerEntryPreparator):
     
