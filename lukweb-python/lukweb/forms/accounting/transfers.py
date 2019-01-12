@@ -72,10 +72,9 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
 
         return ' '.join(
             (
-
                 ugettext(
                     'Not all bank transfer payments of %(member)s '
-                    'can be fully utilised. '
+                    'can be fully utilised.'
                 ),
                 str(bulk_utils.CreditApportionmentMixin.overpayment_fmt_string),
                 self.refund_message
