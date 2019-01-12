@@ -385,9 +385,8 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
         # dupcheck_signature_fields on the model
         params = super().dup_error_params(signature_used)
         # get human-readable value
-        params['nature'] = models.InternalPayment.PAYMENT_NATURE_CHOICES[
-            signature_used[2] - 1
-        ]
+        nature_choices = dict(models.InternalPayment.PAYMENT_NATURE_CHOICES)
+        params['nature'] = nature_choices[signature_used[2]]
         params['member'] = str(self.get_member(pk=signature_used[3]))
         return params
 
