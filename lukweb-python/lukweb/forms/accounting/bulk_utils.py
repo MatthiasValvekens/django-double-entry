@@ -626,7 +626,7 @@ def refund_overpayment(
     ]:
 
     payments = list(payments)
-    if not payments:
+    if not payments or not settings.AUTOGENERATE_REFUNDS:
         return
     p = payments[0]
     payment_model = p.__class__
