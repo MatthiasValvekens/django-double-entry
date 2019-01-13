@@ -7,7 +7,8 @@ from typing import Type, Tuple, cast
 from django.db import models
 from django.db.models import (
     F, Sum, Case, When, Subquery, OuterRef,
-    Value, ExpressionWrapper
+    Value, ExpressionWrapper,
+    Max,
 )
 from django.db.models.functions import Coalesce
 from django.forms import ValidationError
@@ -179,6 +180,29 @@ class DoubleBookInterface(models.Model):
                 )['a']
             )
 
+    @cached_property
+    def fully_matched_date(self):
+        try:
+            return getattr(self, DoubleBookQuerySet.FULLY_MATCHED_DATE_FIELD)
+        except AttributeError:
+            if not self.fully_matched:
+                return None
+            logger.debug(
+                'PERFORMANCE WARNING: '
+                'falling back to database deluge '
+                'for fully_matched_date computation. '
+                'Please review queryset usage. '
+                'Object of type %(model)s with id %(pk)s',
+                {'model': self.__class__, 'pk': self.pk}
+            )
+            import traceback
+            logger.debug(''.join(traceback.format_stack()))
+            other_half = self.get_other_half_model()
+            split_model, other_half_fk = other_half.get_split_model()
+            return self.split_manager.aggregate(
+                a=Max(other_half_fk + '__timestamp')
+            )['a']
+
     def spoof_matched_balance(self, amount):
         setattr(
             self, DoubleBookQuerySet.MATCHED_BALANCE_FIELD, amount
@@ -299,9 +323,12 @@ class BaseFinancialRecord(DoubleBookModel):
 #  (i.e. money that doesn't appear in any transactions so far)
 class DoubleBookQuerySet(models.QuerySet):
 
+    model: Type[DoubleBookModel]
+
     MATCHED_BALANCE_FIELD = 'matched_balance_fromdb'
     UNMATCHED_BALANCE_FIELD = 'unmatched_balance_fromdb' 
     FULLY_MATCHED_FIELD = 'fully_matched_fromdb'
+    FULLY_MATCHED_DATE_FIELD = 'fully_matched_date_fromdb'
 
     def _split_sum_subquery(self):
         """
@@ -310,7 +337,7 @@ class DoubleBookQuerySet(models.QuerySet):
         The final output will be a DecimalField.
         """
         # The pattern used here is from
-        # https://docs.djangoproject.com/en/2.1/ref/models/expressions/
+        # https://docs.djangoproject.com/en/2.1ref/models/expressions/
         split_model, join_on = self.model.get_split_model()
         subq = split_model._default_manager.filter(**{
             join_on: OuterRef('pk')
@@ -322,7 +349,7 @@ class DoubleBookQuerySet(models.QuerySet):
             Value(Decimal('0.00')),
             output_field=models.DecimalField()
         )
-    
+
     def with_remote_accounts(self):
         cls = self.__class__
         # TODO: figure out if this is even necessary
@@ -331,7 +358,7 @@ class DoubleBookQuerySet(models.QuerySet):
         # joins don't work for multiple annotations, so 
         # we have to use a subquery
         total_amount_field_name = self.model.TOTAL_AMOUNT_FIELD_COLUMN
-        return self.annotate(**{
+        annotation_kwargs = {
             cls.MATCHED_BALANCE_FIELD: self._split_sum_subquery(),
             cls.UNMATCHED_BALANCE_FIELD: ExpressionWrapper(
                 F(total_amount_field_name) - F(cls.MATCHED_BALANCE_FIELD),
@@ -356,6 +383,41 @@ class DoubleBookQuerySet(models.QuerySet):
                 }),
                 default=Value(False),
                 output_field=models.BooleanField()
+            ),
+        }
+        return self.annotate(**annotation_kwargs)
+
+    def with_fully_matched_date(self):
+        # Useful e.g. to compute the effective date of payment on a debt
+        # TODO: I assume the db is smart enough to do this more or less
+        #  in tandem with _split_sum_subquery, but is it really that simple?
+        #  Ideally, it would probably be best to do both in the same subquery
+        #  but Django doesn't seem to deal with multi-column subqueries that
+        #  well.
+        cls = self.__class__
+        if cls.FULLY_MATCHED_DATE_FIELD in self.query.annotations:
+            return self
+        qs = self.with_remote_accounts()
+        other_half = self.model.get_other_half_model()
+        split_model, join_on = self.model.get_split_model()
+        __, other_half_fk = other_half.get_split_model()
+        # query string to get the timestamp field on the other half of the
+        # ledger.
+        remote_date_field = other_half_fk + '__timestamp'
+        subq = split_model._default_manager.filter(**{
+            join_on: OuterRef('pk'),
+        }).order_by().values(join_on).annotate(
+            _max_date=Max(remote_date_field)
+        ).values('_max_date')
+
+        return qs.annotate(**{
+            cls.FULLY_MATCHED_DATE_FIELD: Case(
+                When(**{
+                    cls.FULLY_MATCHED_FIELD: True,
+                    'then': Subquery(subq),
+                }),
+                default=Value(None),
+                output_field=models.DateTimeField()
             )
         })
 
@@ -372,9 +434,10 @@ class DoubleBookQuerySet(models.QuerySet):
 
 class DuplicationProtectedQuerySet(DoubleBookQuerySet):
 
+    model: Type[DuplicationProtectionMixin]
+
     # Prepare buckets for duplication check
     def dupcheck_buckets(self, date_bounds=None):
-        assert issubclass(self.model, DuplicationProtectionMixin)
         if self.model.dupcheck_signature_fields is None:
             raise TypeError(
                 'Duplicate checking is not supported on this model.'
@@ -404,8 +467,11 @@ class DuplicationProtectedQuerySet(DoubleBookQuerySet):
 # mainly for semantic consistency and backwards compatibility
 class BaseDebtQuerySet(DoubleBookQuerySet):
     
-    def with_payments(self):
-        return self.with_remote_accounts()
+    def with_payments(self, include_timestamps=False):
+        if include_timestamps:
+            return self.with_fully_matched_date()
+        else:
+            return self.with_remote_accounts()
 
     def unpaid(self):
         return self.unmatched()
@@ -467,6 +533,10 @@ class BaseDebtRecord(BaseFinancialRecord):
     @property
     def paid(self):
         return self.fully_matched
+
+    @property
+    def payment_timestamp(self):
+        return self.fully_matched_date
 
 
 class BasePaymentRecord(BaseFinancialRecord):
