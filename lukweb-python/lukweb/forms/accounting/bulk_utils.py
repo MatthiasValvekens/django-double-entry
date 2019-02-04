@@ -414,7 +414,9 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
         except StopIteration:
             # all debts fully paid back, bail
             if credit_remaining:
-                payment.spoof_matched_balance(credit_remaining.amount)
+                payment.spoof_matched_balance(
+                    payment.total_amount.amount - credit_remaining.amount
+                )
                 results.remaining_payments.append(payment)
             for p in payments_iter:
                 if p.credit_remaining:
@@ -439,7 +441,9 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
         except StopIteration:
             # no money left to pay stuff, bail
             if debt_remaining:
-                debt.spoof_matched_balance(debt_remaining.amount)
+                debt.spoof_matched_balance(
+                    debt.total_amount.amount - debt_remaining.amount
+                )
                 results.remaining_debts.append(debt)
             for d in debts_iter:
                 if d.balance:
