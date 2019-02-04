@@ -470,7 +470,7 @@ def refund_overpayment(
     ]:
 
     payments = list(payments)
-    if not payments or not settings.AUTOGENERATE_REFUNDS:
+    if not payments:
         return
     p = payments[0]
     payment_model = p.__class__
@@ -501,7 +501,7 @@ def refund_overpayment(
             if payment.credit_remaining:
                 yield split_model(**{
                     payment_fk_name: payment, debt_fk_name: refund_object,
-                    'amount': credit_to_refund
+                    'amount': payment.credit_remaining
                 })
 
     return refund_object, splits_to_create()

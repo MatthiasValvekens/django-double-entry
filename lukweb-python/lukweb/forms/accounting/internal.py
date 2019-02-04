@@ -223,7 +223,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                 remaining_payments += results.remaining_payments
             # we cannot yield from the refund splits here
             # since the refund object hasn't been saved yet
-            if refund_category is not None:
+            if refund_category is not None and settings.AUTOGENERATE_REFUNDS:
                 return bulk_utils.refund_overpayment(
                     remaining_payments, debt_kwargs={
                     'member': member, 'gnucash_category': refund_category,
@@ -237,7 +237,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                 debts=member.debts.unpaid().order_by('timestamp'),
                 split_model=models.InternalPaymentSplit
             )
-            if refund_category is not None:
+            if refund_category is not None and settings.AUTOGENERATE_REFUNDS:
                 return bulk_utils.refund_overpayment(
                     results.remaining_payments, debt_kwargs={
                         'member': member, 'gnucash_category': refund_category,
