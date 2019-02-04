@@ -5,7 +5,6 @@ from itertools import chain
 from typing import Iterator
 
 from django import forms
-from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.db.models import Q
 from django.forms.models import ModelForm, modelformset_factory
@@ -199,6 +198,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
 
         financial_globals = models.FinancialGlobals.load()
         refund_category = financial_globals.refund_credit_gnucash_acct
+        autogenerate_refunds = financial_globals.autogenerate_refunds
         def filtered(member):
             member_payments = payments_by_member[member.pk]
             all_debts = member.debts.unpaid().order_by('timestamp')
@@ -223,7 +223,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                 remaining_payments += results.remaining_payments
             # we cannot yield from the refund splits here
             # since the refund object hasn't been saved yet
-            if refund_category is not None and settings.AUTOGENERATE_REFUNDS:
+            if refund_category is not None and autogenerate_refunds:
                 return bulk_utils.refund_overpayment(
                     remaining_payments, debt_kwargs={
                     'member': member, 'gnucash_category': refund_category,
@@ -237,7 +237,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                 debts=member.debts.unpaid().order_by('timestamp'),
                 split_model=models.InternalPaymentSplit
             )
-            if refund_category is not None and settings.AUTOGENERATE_REFUNDS:
+            if refund_category is not None and autogenerate_refunds:
                 return bulk_utils.refund_overpayment(
                     results.remaining_payments, debt_kwargs={
                         'member': member, 'gnucash_category': refund_category,
@@ -379,7 +379,8 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
     def refund_message(self):
         financial_globals = models.FinancialGlobals.load()
         refund_category = financial_globals.refund_credit_gnucash_acct
-        if settings.AUTOGENERATE_REFUNDS and refund_category is None:
+        autogenerate_refunds = financial_globals.autogenerate_refunds
+        if autogenerate_refunds and refund_category is None:
             return _(
                 'Refund records cannot be created because the '
                 'corresponding setting in the financial globals is not '

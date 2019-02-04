@@ -1,8 +1,8 @@
 import logging
 from collections import defaultdict
 
-from django.conf import settings
 from django.shortcuts import render
+from django.utils.functional import cached_property
 from django.utils.translation import (
     ugettext_lazy as _, ugettext,
 )
@@ -86,11 +86,12 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
         params['member'] = str(self._members_by_id[debt_key])
         return params
 
-    @property
+    @cached_property
     def refund_message(self):
         financial_globals = models.FinancialGlobals.load()
         refund_category = financial_globals.refund_credit_gnucash_acct
-        if settings.AUTOGENERATE_REFUNDS and refund_category is None:
+        autogenerate_refunds = financial_globals.autogenerate_refunds
+        if autogenerate_refunds and refund_category is None:
             return _(
                 'Refund records cannot be created because the '
                 'corresponding setting in the financial globals is not '

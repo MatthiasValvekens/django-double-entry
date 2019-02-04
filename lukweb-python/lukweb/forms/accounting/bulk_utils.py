@@ -540,9 +540,11 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
             )
         }
 
-    @property
+    @cached_property
     def refund_message(self):
-        if settings.AUTOGENERATE_REFUNDS:
+        financial_globals = models.FinancialGlobals.load()
+        autogenerate_refunds = financial_globals.autogenerate_refunds
+        if autogenerate_refunds:
             return ugettext(
                 'Refunds will be automatically created to compensate '
                 'for the difference in funds. '
