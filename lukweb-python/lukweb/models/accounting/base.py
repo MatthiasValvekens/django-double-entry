@@ -213,7 +213,7 @@ class DoubleBookInterface(models.Model):
         except KeyError:
             pass
 
-    @cached_property
+    @property
     def unmatched_balance(self):
         try:
             return decimal_to_money(
@@ -223,7 +223,7 @@ class DoubleBookInterface(models.Model):
             total_amount = getattr(self, self.TOTAL_AMOUNT_FIELD_NAME)
             return  total_amount - self.matched_balance
 
-    @cached_property
+    @property
     def fully_matched(self):
         # ignore the direct database result here, since
         # it might have rounding errors (and it's intended for filtering

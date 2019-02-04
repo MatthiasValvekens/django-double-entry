@@ -11,7 +11,7 @@ from django.forms import ValidationError
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import (
-    ugettext_lazy as _, pgettext_lazy,
+    ugettext_lazy as _, pgettext_lazy, ugettext
 )
 
 from . import base as accounting_base
@@ -170,7 +170,7 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
         if self.comment:
             return self.comment
         elif self.is_refund:
-            return _('<refund/unmanaged debt>')
+            return ugettext('<refund/unmanaged debt>')
         elif self.activity_participation is not None:
             return str(self.activity_participation.activity)
         else:
