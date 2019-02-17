@@ -151,7 +151,7 @@ class FetchMembersMixin(LedgerEntryPreparator):
             line_nos, msg, params={'member_str': member_str}
         )
 
-    def get_member(self, pk=None, member_str=None):
+    def get_member(self, *, pk=None, member_str=None):
         if pk is not None:
             return self._members_by_id[pk]
         elif member_str is not None:
