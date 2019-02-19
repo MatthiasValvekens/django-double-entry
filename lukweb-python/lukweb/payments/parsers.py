@@ -153,6 +153,8 @@ class MemberTransactionParser(FinancialCSVParser):
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
+        if parsed is None:
+            return None
         parsed['member_str'] = row[self.member_column_name]
         return parsed
 
@@ -169,6 +171,8 @@ class PaymentCSVParser(FinancialCSVParser):
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
+        if parsed is None:
+            return None
         nature = self.get_nature(line_no, row)
         if nature is None:
             return None
@@ -194,6 +198,8 @@ class DebtCSVParser(MemberTransactionParser):
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
+        if parsed is None:
+            return None
         parsed['comment'] = row[self.comment_column_name]
         parsed['gnucash'] = row[self.gnucash_column_name]
         # coerce falsy values
@@ -240,6 +246,8 @@ class MiscDebtPaymentCSVParser(PaymentCSVParser, MemberTransactionParser):
     # filter column requires a value if supplied!
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
+        if parsed is None:
+            return None
         try:
             debt_filter = slugify(row[self.filter_column_name])
             if not debt_filter:
@@ -279,6 +287,8 @@ class BankCSVParser(PaymentCSVParser):
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
+        if parsed is None:
+            return None
         ogm = self.get_ogm(line_no, row)
         if ogm is None:
             return None
