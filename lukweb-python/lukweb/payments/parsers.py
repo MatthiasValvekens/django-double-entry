@@ -181,13 +181,16 @@ class DebtCSVParser(MemberTransactionParser):
 
     comment_column_name = 'mededeling'
     gnucash_column_name = 'gnucash'
+    activity_column_name = 'activiteit'
 
     class TransactionInfo(MemberTransactionParser.TransactionInfo):
-        def __init__(self, *, comment, gnucash, filter_slug, **kwargs):
+        def __init__(self, *, comment, gnucash, filter_slug, activity_id=None,
+                     **kwargs):
             super().__init__(**kwargs)
             self.comment = comment
             self.gnucash = gnucash
             self.filter_slug = filter_slug
+            self.activity_id = activity_id
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
@@ -195,6 +198,20 @@ class DebtCSVParser(MemberTransactionParser):
         parsed['gnucash'] = row[self.gnucash_column_name]
         # coerce falsy values
         parsed['filter_slug'] = slugify(row.get('filter', '')) or None
+        activity_id = row.get(self.activity_column_name, None)
+        if activity_id:
+            try:
+                parsed['activity_id'] = int(activity_id)
+            except ValueError:
+                self.error(
+                    line_no, _(
+                        '\'%(colname)s\' value should be an integer, not '
+                        '%(val)s.'
+                    ) % {
+                        'colname': self.activity_column_name,
+                        'val': activity_id
+                    }
+                )
         return parsed
 
 

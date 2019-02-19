@@ -64,6 +64,7 @@ class EphemeralAddDebtForm(ModelForm):
     name = forms.CharField(required=False)
     email = forms.EmailField(required=False)
     filter_slug = forms.SlugField(required=False)
+    activity_id = forms.IntegerField(required=False)
 
     class Meta:
         model = models.InternalDebtItem
@@ -106,6 +107,17 @@ class BaseBulkAddDebtFormSet(forms.BaseModelFormSet):
 
         def build_debt_objects():
             gnucash_cache = dict()
+            by_activity_id = defaultdict(list)
+            for form in self.extra_forms:
+                activity_id = form.cleaned_data['activity_id']
+                if activity_id is None:
+                    continue
+                by_activity_id[activity_id].append(
+                    form.cleaned_data['member_id']
+                )
+            _actreg_index, notfound = lookup_act_registration_ids(
+                by_activity_id
+            )
             for form in self.extra_forms:
                 data = form.cleaned_data
                 gnucash_raw = data['gnucash'].strip()
@@ -117,18 +129,44 @@ class BaseBulkAddDebtFormSet(forms.BaseModelFormSet):
                     )
                     gnucash_cache[gnucash_raw] = gnucash_category
 
+                activity_id = data['activity_id']
+                member_id = data['member_id']
+                if activity_id is not None:
+                    try:
+                        actreg_id = _actreg_index[(activity_id, member_id)]
+                    except KeyError:
+                        # by all accounts these debt records shouldn't be saved
+                        #  since they would have been deleted if the activity
+                        #  participation deletion action would have occurred
+                        #  after saving the debt
+                        logger.warning(
+                            'Could not find activity participation record '
+                            'for activity with id %(act)d and member with '
+                            'id %(member)d. '
+                            'Possible race condition; debt record was NOT '
+                            'saved.', {
+                                'member': member_id, 'act': activity_id
+                            }
+                        )
+                        continue
+                else:
+                    actreg_id = None
+
                 yield models.InternalDebtItem(
                     total_amount=data['total_amount'],
-                    member_id=data['member_id'],
+                    member_id=member_id,
                     comment=data['comment'],
                     gnucash_category=gnucash_category,
                     filter_slug=data.get('filter_slug') or None,
-                    timestamp=data['timestamp']
+                    timestamp=data['timestamp'],
+                    activity_participation_id=actreg_id,
                 )
 
-        debts = list(build_debt_objects())
-        if commit:
-            models.InternalDebtItem.objects.bulk_create(debts)
+        from django.db import transaction
+        with transaction.atomic():
+            debts = list(build_debt_objects())
+            if commit:
+                models.InternalDebtItem.objects.bulk_create(debts)
         return debts
 
 
@@ -138,17 +176,69 @@ BulkAddDebtFormSet = modelformset_factory(
     formset=BaseBulkAddDebtFormSet
 )
 
+def lookup_act_registration_ids(member_ids_by_activity: dict):
+    from functools import reduce
+    from operator import or_
+    if not member_ids_by_activity:
+        return models.ActivityParticipation.objects.none(), set()
+
+    qs_iter = (
+        models.ActivityParticipation.objects.filter(
+            activity_id=activity_id, member_id__in=member_ids
+        ) for activity_id, member_ids in member_ids_by_activity.items()
+    )
+    reg_objs = reduce(or_, qs_iter).values('activity_id', 'member_id', 'id')
+
+    result = {
+        (r['activity_id'], r['member_id']): r['id'] for r in reg_objs
+    }
+    all_pairs = {
+        (activity_id, member_id)
+        for activity_id, member_ids in member_ids_by_activity.items()
+        for member_id in member_ids
+    }
+    unseen = all_pairs - result.keys()
+    return result, unseen
 
 class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
     formset_prefix = 'bulk-add-debt'
     formset_class = BulkAddDebtFormSet
     model = models.InternalDebtItem
+    _actreg_index = None
+
+    def prepare(self):
+        super().prepare()
+        by_activity_id = defaultdict(list)
+        for info in self.transactions:
+            if info.activity_id is None:
+                continue
+            mem = self.get_member(member_str=info.member_str)
+            by_activity_id[info.activity_id].append(mem.pk)
+        self._actreg_index, notfound = lookup_act_registration_ids(
+            by_activity_id
+        )
+        for activity_id, member_id in notfound:
+            # This function is expert-only, so screw properly formatted errors
+            self.error_at_line(
+                0, _(
+                    'Member %(member)s with id %(member_id)d appears not to '
+                    'be registered for activity with id %(act_id)d.'
+                ), params={
+                    'member': self.get_member(pk=member_id),
+                    'member_id': member_id,
+                    'act_id': activity_id
+                }
+            )
 
     def form_kwargs_for_transaction(self, transaction):
         kwargs = super().form_kwargs_for_transaction(transaction)
         kwargs['comment'] = transaction.comment
         kwargs['gnucash'] = transaction.gnucash
         kwargs['filter_slug'] = transaction.filter_slug
+        # we pass this back to the form. Passing the registration id directly
+        #  is problematic because of inter-request race conditions.
+        # (it's conceivable that a user might deregister inbetween requests)
+        kwargs['activity_id'] = transaction.activity_id
         return kwargs
 
     def model_kwargs_for_transaction(self, transaction):
@@ -160,6 +250,13 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
             transaction.gnucash, create=False
         )
         kwargs['filter_slug'] = transaction.filter_slug
+        if transaction.activity_id is not None:
+            try:
+                kwargs['activity_participation_id'] = self._actreg_index[
+                    (transaction.activity_id, kwargs['member'].pk)
+                ]
+            except KeyError:
+                return None
         return kwargs
 
 

@@ -1,4 +1,5 @@
 import logging
+import re
 from decimal import Decimal
 from collections import defaultdict, namedtuple, deque
 from typing import (
@@ -137,6 +138,11 @@ class LedgerEntryPreparator(ParserErrorMixin):
         return self._formset
 
 
+UID_FORMAT = re.compile(
+    r'(?P<uid>\d+)(:(?P<token>\d+-[a-z0-9]+-[0-9a-f]{20})'
+    ':(?P<salt>[-_A-Za-z0-9]+))?'
+)
+
 class FetchMembersMixin(LedgerEntryPreparator):
 
     _members_by_str = None
@@ -151,7 +157,7 @@ class FetchMembersMixin(LedgerEntryPreparator):
             line_nos, msg, params={'member_str': member_str}
         )
 
-    def get_member(self, pk=None, member_str=None):
+    def get_member(self, *, pk=None, member_str=None):
         if pk is not None:
             return self._members_by_id[pk]
         elif member_str is not None:
@@ -164,12 +170,67 @@ class FetchMembersMixin(LedgerEntryPreparator):
     def prepare(self): 
         super().prepare()
         # split the transaction list into email and name indices
-        email_index, name_index = defaultdict(list), defaultdict(list)
+        email_index = defaultdict(list)
+        name_index = defaultdict(list)
+        uid_index = defaultdict(list)
         for info in self.transactions:
-            use_email = '@' in info.member_str
-            targ = email_index if use_email else name_index
-            key = info.member_str if use_email else info.member_str.casefold()
-            targ[key].append(info)
+            match = UID_FORMAT.match(info.member_str)
+            if match is None:
+                if '@' in info.member_str:
+                    email_index[info.member_str].append(info)
+                else:
+                    name_index[info.member_str.casefold()].append(info)
+            else:
+                # if the validation token is left out, we trust that
+                # the operator knows what they're doing
+                uid_str = match.group('uid')
+                uid = int(uid_str)
+                token = match.group('token')
+                if token is not None:
+                    uid_index[uid].append(
+                        (info, (token, match.group('salt')))
+                    )
+                else:
+                    uid_index[uid].append((info, None))
+                # save canonical version of the member_str
+                info.member_str = uid_str
+
+        self._members_by_str = dict()
+        self._members_by_id = dict()
+
+        member_uid_qs = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().filter(
+                pk__in=uid_index.keys()
+            )
+        for m in member_uid_qs:
+            tinfos = uid_index[m.pk]
+            for info, validation in tinfos:
+                if validation is not None:
+                    token, salt = validation
+                    token_valid = m.validate_external_uid_token(
+                        external_form_salt=salt, bare_token=token
+                    )
+                    if not token_valid:
+                        self.error_at_line(
+                            info.line_no,
+                            _(
+                                'Token %(token)s is invalid for uid %(uid)d '
+                                'with salt value %(salt)s. Skipped processing.'
+                            ), params={
+                                'token': token, 'uid': m.pk, 'salt': salt,
+                            }
+                        )
+                        # This will cause the transaction to be eliminated
+                        # during the ledger preparation stage
+                        info.member_str = None
+                        continue
+                self._members_by_id[m.pk] = m
+                self._members_by_str[info.member_str] = m
+
+        unseen_uids = uid_index.keys() - set(m.pk for m in member_uid_qs)
+        for pk in unseen_uids:
+            ts = uid_index[pk]
+            self.unknown_member(str(pk), [t.line_no for t, v in ts])
 
         member_email_qs, unseen = models.ChoirMember.objects \
             .select_related('user').with_debt_annotations().by_emails(
@@ -180,7 +241,6 @@ class FetchMembersMixin(LedgerEntryPreparator):
             ts = email_index[email]
             self.unknown_member(email, [t.line_no for t in ts])
 
-        # TODO Restrict to active members only, maybe?
         member_name_qs, unseen, duplicates = models.ChoirMember.objects \
             .select_related('user').with_debt_annotations().by_full_names(
                 name_index.keys(), validate_unseen=True, validate_nodups=True
@@ -199,9 +259,6 @@ class FetchMembersMixin(LedgerEntryPreparator):
             self.error_at_lines(
                 [t.line_no for t in ts], msg, params={'member_str': name},
             )
-
-        self._members_by_str = dict()
-        self._members_by_id = dict()
 
         # build member dictionaries
         for m in member_email_qs:
