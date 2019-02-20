@@ -119,7 +119,6 @@ class FinancialCSVParser:
         try:
             rd = Decimal(amt_str).quantize(Decimal('.01'))
             if rd <= 0:
-                self.error(line_no, _('Amount must be greater than zero.'))
                 return None
             return Money(rd, currency)
         except (ValueError, IndexError, DecimalException):
