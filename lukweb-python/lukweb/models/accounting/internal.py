@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.db import models
 from django.db.models import (
     Sum, Value,
+    Index,
 )
 from django.db.models.functions import Coalesce
 from django.forms import ValidationError
@@ -139,6 +140,10 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
         verbose_name = _('internal debt')
         verbose_name_plural = _('internal debts')
         ordering = ('timestamp',)
+        indexes = (
+            Index(fields=['member', 'filter_slug']),
+            Index(fields=['filter_slug'])
+        )
 
     def clean(self):
         if not self.filter_slug:
