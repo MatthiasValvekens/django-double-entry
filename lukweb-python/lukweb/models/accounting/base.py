@@ -22,8 +22,9 @@ from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
 from djmoney.money import Money
 
-from ...payments import decimal_to_money
-from ...utils import _dt_fallback
+from lukweb.models.utils import make_token
+from ...payments import decimal_to_money, ogm_from_prefix, parse_ogm
+from ...utils import _dt_fallback, validated_bulk_query
 
 __all__ = [
     'DoubleBookModel', 'ConcreteAmountMixin', 'BaseDebtRecord',
@@ -663,3 +664,75 @@ class BaseDebtPaymentSplit(BaseTransactionSplit):
                     'debt_ts': loctimefmt(debt.timestamp)
                 }
             )
+
+NINE_DIGIT_MODPAIR = (783142319, 289747279)
+
+def parse_transaction_no(ogm, prefix_digit, match=None):
+    prefix, _ = parse_ogm(ogm, match)
+
+    prefix_str = str(prefix)
+    if prefix_str[0] != prefix_digit:
+        raise ValueError()
+    unpack = (int(prefix_str[1:]) * NINE_DIGIT_MODPAIR[1]) % 10**9
+    # ignore token digest, it already served its purpose
+    return unpack // 100
+
+class TransactionPartyQuerySet(models.QuerySet):
+    def by_payment_tracking_no(self, ogm):
+        try:
+            pk = parse_transaction_no(
+                ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
+            )
+        except ValueError:
+            raise self.model.DoesNotExist()
+        return self.get(pk=pk)
+
+    @validated_bulk_query(lambda x: x.payment_tracking_no)
+    def by_payment_tracking_nos(self, ogms):
+        def compute_pks():
+            for ogm in ogms:
+                try:
+                    yield parse_transaction_no(
+                        ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
+                    )
+                except ValueError:
+                    continue
+
+        pks = set(x for x in compute_pks())
+        if not pks:
+            return self.none()
+        return self.filter(pk__in=pks)
+
+# TODO: auto-enforce equality of transaction parties accross debt/payment splits
+#  through reflection
+class TransactionPartyMixin(models.Model):
+
+    PAYMENT_TRACKING_PREFIX = None
+
+    hidden_token = models.BinaryField(
+        max_length=8,
+        verbose_name=_('hidden token'),
+        help_text=_(
+            'Hidden unchanging token, for use in low-security '
+            'cryptographic operations. In principle never '
+            'displayed to any users.'
+        ),
+        editable=False,
+        default=make_token
+    )
+
+    class Meta:
+        abstract = True
+
+    @cached_property
+    def payment_tracking_no(self, formatted=True):
+        # memoryview weirdness forces this
+        token_seed = bytes(self.hidden_token)[1]
+        raw = int('%07d%02d' % (
+                self.pk % 10 ** 7,
+                token_seed % 100,
+            )
+        )
+        obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
+        prefix_str = '%s%09d' % (self.__class__.PAYMENT_TRACKING_PREFIX, obf)
+        return ogm_from_prefix(prefix_str, formatted)
