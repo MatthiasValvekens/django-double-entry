@@ -552,8 +552,9 @@ def refund_overpayment(
     if debt_kwargs is not None:
         kwargs.update(debt_kwargs)
     kwargs['is_refund'] = True
-    kwargs[debt_model.TOTAL_AMOUNT_FIELD_NAME] = credit_to_refund
     refund_object = debt_model(**kwargs)
+    # total_amount may not be an actual field
+    refund_object.total_amount = credit_to_refund
 
     # this generator should be triggered by the caller when
     # the refund_object and all payments have been saved.

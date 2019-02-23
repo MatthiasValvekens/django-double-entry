@@ -20,12 +20,13 @@ from django.utils.translation import (
 from djmoney.models.fields import MoneyField
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
+from djmoney.money import Money
 
 from ...payments import decimal_to_money
 from ...utils import _dt_fallback
 
 __all__ = [
-    'DoubleBookModel', 'BaseFinancialRecord', 'BaseDebtRecord',
+    'DoubleBookModel', 'ConcreteAmountMixin', 'BaseDebtRecord',
     'BasePaymentRecord', 'BaseDebtQuerySet', 'BasePaymentQuerySet',
     'BaseTransactionSplit', 'DoubleBookQuerySet', 'nonzero_money_validator'
 ]
@@ -51,7 +52,6 @@ class DoubleBookInterface(models.Model):
     Name of the field or property representing the total amount.
     Possibly different from the actual db column / annotation.
     """
-    TOTAL_AMOUNT_FIELD_NAME = 'total_amount'
     TOTAL_AMOUNT_FIELD_COLUMN = 'total_amount'
 
     # This error message is vague, so subclasses should override it with
@@ -67,8 +67,9 @@ class DoubleBookInterface(models.Model):
     _remote_target_field = None
     _other_half_model = None
 
-    timestamp = None
-    processed = None
+    timestamp: datetime
+    processed: datetime
+    total_amount: Money
 
     class Meta:
         abstract = True
@@ -220,8 +221,7 @@ class DoubleBookInterface(models.Model):
                 getattr(self, DoubleBookQuerySet.UNMATCHED_BALANCE_FIELD)
             )
         except AttributeError:
-            total_amount = getattr(self, self.TOTAL_AMOUNT_FIELD_NAME)
-            return  total_amount - self.matched_balance
+            return  self.total_amount - self.matched_balance
 
     @property
     def fully_matched(self):
@@ -289,13 +289,13 @@ class DuplicationProtectionMixin(DoubleBookInterface):
         # imports, which would eliminate the need for duplicate 
         # checking in practice.
         date = timezone.localdate(self.timestamp)
-        amt = getattr(self, cls.TOTAL_AMOUNT_FIELD_NAME).amount
+        amt = self.total_amount.amount
         return (date, amt) + tuple(
             getattr(self, field) for field in sig_fields
         )
 
 
-class BaseFinancialRecord(DoubleBookModel):
+class ConcreteAmountMixin(models.Model):
 
     total_amount = MoneyField(
         verbose_name=_('total amount'),
@@ -492,19 +492,8 @@ class BasePaymentQuerySet(DoubleBookQuerySet):
         return self.fully_matched()
 
 
-class BaseDebtRecord(BaseFinancialRecord):
+class BaseDebtRecord(DoubleBookModel):
 
-    @classmethod
-    def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
-        return cast(
-            Tuple[Type['BaseDebtPaymentSplit'], str], super().get_split_model()
-        )
-
-    @classmethod
-    def get_other_half_model(cls) -> Type['BasePaymentRecord']:
-        return cast(
-            Type['BasePaymentRecord'], super().get_other_half_model()
-        )
 
     is_refund = models.BooleanField(
         verbose_name=_('Refund/unmanaged'),
@@ -521,6 +510,18 @@ class BaseDebtRecord(BaseFinancialRecord):
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
+        return cast(
+            Tuple[Type['BaseDebtPaymentSplit'], str], super().get_split_model()
+        )
+
+    @classmethod
+    def get_other_half_model(cls) -> Type['BasePaymentRecord']:
+        return cast(
+            Type['BasePaymentRecord'], super().get_other_half_model()
+        )
 
     @property
     def amount_paid(self):
@@ -539,7 +540,12 @@ class BaseDebtRecord(BaseFinancialRecord):
         return self.fully_matched_date
 
 
-class BasePaymentRecord(BaseFinancialRecord):
+class BasePaymentRecord(DoubleBookModel):
+
+    objects = BasePaymentQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
 
     @classmethod
     def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
@@ -552,11 +558,6 @@ class BasePaymentRecord(BaseFinancialRecord):
         return cast(
             Type['BaseDebtRecord'], super().get_other_half_model()
         )
-
-    objects = BasePaymentQuerySet.as_manager()
-
-    class Meta:
-        abstract = True
 
     @property
     def credit_used(self):

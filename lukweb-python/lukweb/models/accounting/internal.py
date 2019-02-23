@@ -84,7 +84,8 @@ class IDIQuerySet(accounting_base.BaseDebtQuerySet):
         })
 
 
-class InternalDebtItem(accounting_base.BaseDebtRecord):
+class InternalDebtItem(accounting_base.BaseDebtRecord,
+                       accounting_base.ConcreteAmountMixin):
 
     member = ChoirMemberField(
         on_delete=models.PROTECT,
@@ -217,7 +218,8 @@ class IPQuerySet(accounting_base.BasePaymentQuerySet,
                  accounting_base.DuplicationProtectedQuerySet):
     pass
 
-class InternalPayment(accounting_base.BasePaymentRecord, 
+class InternalPayment(accounting_base.BasePaymentRecord,
+                      accounting_base.ConcreteAmountMixin,
                       accounting_base.DuplicationProtectionMixin):
 
     dupcheck_signature_fields = ('nature', 'member')
