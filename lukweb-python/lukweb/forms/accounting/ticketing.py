@@ -14,45 +14,15 @@ __all__ = [
     'ReservationPaymentForm', 'ReservationPaymentFormSet'
 ]
 
-
-class TicketForm(ModelForm): 
-
-    class Meta:
-        model = models.Ticket
-        fields = ('amount',)
-
-    def save(self, commit=True):
-        instance = super(TicketForm, self).save(commit=False)
-        instance.reservation = self._reservation
-        instance.category = self.category
-        if instance.amount == 0:
-            return instance
-        if commit:
-            instance.save()
-        return instance
-
-
 class ReservationPaymentForm(ModelForm):
     # mostly UI data again
+    # TODO: this form needs reworking (post-accounting refactor)
     total_amount = MoneyField()
     event_name = forms.CharField()
     
     class Meta:
-        model = models.Reservation
-        fields = (
-            'name', 'email', 'payment_timestamp'
-        )
-
-    def __init__(self, *args, instance=None, **kwargs):
-        if instance:
-            initial = kwargs.get('initial', {})
-            initial['total_amount'] = instance.total_price
-            initial['event_name'] = instance.event.name
-            kwargs['initial'] = initial
-        super(ReservationPaymentForm, self).__init__(
-            *args, instance=instance, **kwargs
-        )
-
+        model = models.ReservationPayment
+        fields = ()
 
 class BaseReservationPaymentFormSet(forms.BaseModelFormSet):
     def save(self, commit=True):
@@ -86,7 +56,7 @@ class BaseReservationPaymentFormSet(forms.BaseModelFormSet):
 
 
 ReservationPaymentFormSet = modelformset_factory(
-    model=models.Reservation,
+    model=models.ReservationPayment,
     form=ReservationPaymentForm,
     formset=BaseReservationPaymentFormSet,
     extra=0
