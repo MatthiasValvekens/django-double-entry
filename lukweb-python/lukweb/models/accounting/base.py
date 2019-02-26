@@ -724,6 +724,10 @@ class TransactionPartyMixin(models.Model):
     class Meta:
         abstract = True
 
+    @classmethod
+    def parse_transaction_no(cls, ogm):
+        return parse_transaction_no(ogm, cls.PAYMENT_TRACKING_PREFIX)
+
     @cached_property
     def payment_tracking_no(self, formatted=True):
         # memoryview weirdness forces this

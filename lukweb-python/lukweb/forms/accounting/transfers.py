@@ -111,7 +111,7 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
         kwargs = super().model_kwargs_for_transaction(transaction)
         if kwargs is None:
             return None
-        pk = payments.parse_internal_debt_ogm(transaction.ogm)
+        pk = models.ChoirMember.parse_transaction_no(transaction.ogm)
         member = self._members_by_id[pk]
         # the pk part might match accidentally
         # so we check the hidden token digest too.
