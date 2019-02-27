@@ -101,6 +101,8 @@ class InternalDebtItem(accounting_base.BaseDebtRecord,
     def clean(self):
         if not self.filter_slug:
             self.filter_slug = None
+        if not self.comment:
+            self.comment = ''
 
     @property
     def amount(self):
