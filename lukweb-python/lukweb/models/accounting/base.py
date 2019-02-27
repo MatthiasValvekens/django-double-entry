@@ -9,6 +9,7 @@ from django.db.models import (
     F, Sum, Case, When, Subquery, OuterRef,
     Value, ExpressionWrapper,
     Max,
+    Prefetch,
 )
 from django.db.models.functions import Coalesce
 from django.forms import ValidationError
@@ -678,6 +679,9 @@ def parse_transaction_no(ogm, prefix_digit, match=None):
     return unpack // 100
 
 class TransactionPartyQuerySet(models.QuerySet):
+    model: 'TransactionPartyMixin'
+    DEBT_BALANCE_FIELD = 'debt_balance_fromdb'
+
     def by_payment_tracking_no(self, ogm):
         try:
             pk = parse_transaction_no(
@@ -703,11 +707,77 @@ class TransactionPartyQuerySet(models.QuerySet):
             return self.none()
         return self.filter(pk__in=pks)
 
+    def with_debt_annotations(self):
+        # annotate debts relation
+        # this does NOT compute the debt balance/member annotation
+        return self.prefetch_related(
+            Prefetch(
+                self.model.DEBTS_RELATION,
+                queryset=self.model.get_debt_model().objects.with_payments()
+            )
+        )
+
+    def with_payment_annotations(self):
+        # annotate payments relation (for symmetry)
+        return self.prefetch_related(
+            Prefetch(
+                self.model.PAYMENTS_RELATION,
+                queryset=self.model.get_payment_model().objects.with_debts()
+            )
+        )
+
+    def with_debts_and_payments(self):
+        return self.with_debt_annotations().with_payment_annotations()
+
+    def with_debt_balances(self):
+        # TODO: figure out if this is even necessary
+        cls = self.__class__
+        if cls.DEBT_BALANCE_FIELD in self.query.annotations:
+            return self
+
+        # prefetch_related doesn't work and leads to
+        # confusing but nonetheless absolutely hilarious bugs.
+        # prefetching debts as InternalDebtItem.objects.with_payments(),
+        # and then annotating Sum(DEBT_BALANCE_FIELD) will cause
+        # Django to sum the primary keys of every debt object.
+
+        # hence, we have to make the following sacrifice to the
+        # Flying Spaghetti Monster.
+        base_debt_qs = self.model.get_debt_model().objects.unpaid()
+        tp_remote_fk = self.model.get_debt_remote_fk()
+        debt_balance_subq = base_debt_qs.filter(**{
+            tp_remote_fk: OuterRef('pk'),
+        }).order_by().values(tp_remote_fk).annotate(
+            total_balance=Coalesce(
+                Sum(
+                    DoubleBookQuerySet.UNMATCHED_BALANCE_FIELD,
+                    output_field=models.DecimalField()
+                ),
+                Value(Decimal('0.00')),
+                output_field=models.DecimalField()
+            )
+        ).values('total_balance')
+
+        return self.annotate(**{
+            cls.DEBT_BALANCE_FIELD: Coalesce(
+                Subquery(debt_balance_subq),
+                Value(Decimal('0.00')),
+                output_field=models.DecimalField()
+            )
+        })
+        # R'amen
+
 # TODO: auto-enforce equality of transaction parties accross debt/payment splits
 #  through reflection
 class TransactionPartyMixin(models.Model):
 
     PAYMENT_TRACKING_PREFIX = None
+    DEBTS_RELATION = 'debts'
+    PAYMENTS_RELATION = 'payments'
+    _debt_model = None
+    _payment_model = None
+    _debt_remote_fk = None
+    _payment_remote_fk = None
 
     hidden_token = models.BinaryField(
         max_length=8,
@@ -725,6 +795,43 @@ class TransactionPartyMixin(models.Model):
         abstract = True
 
     @classmethod
+    def _annotate_model_metadata(cls):
+        if cls._debt_model is not None:
+            return
+        debts_f = cls._meta.get_field(cls.DEBTS_RELATION)
+        payments_f = cls._meta.get_field(cls.PAYMENTS_RELATION)
+        cls._debt_model = debts_f.related_model
+        cls._payment_model = payments_f.related_model
+        if not issubclass(cls._debt_model, BaseDebtRecord):
+            raise TypeError('Debts relation does not point to a debt model')
+        if not issubclass(cls._payment_model, BasePaymentRecord):
+            raise TypeError(
+                'Payments relation does not point to a payment model'
+            )
+        cls._debt_remote_fk = debts_f.remote_field.name
+        cls._payment_remote_fk = payments_f.remote_field.name
+
+    @classmethod
+    def get_debt_model(cls):
+        cls._annotate_model_metadata()
+        return cls._debt_model
+
+    @classmethod
+    def get_payment_model(cls):
+        cls._annotate_model_metadata()
+        return cls._payment_model
+
+    @classmethod
+    def get_debt_remote_fk(cls):
+        cls._annotate_model_metadata()
+        return cls._debt_remote_fk
+
+    @classmethod
+    def get_payment_remote_fk(cls):
+        cls._annotate_model_metadata()
+        return cls._payment_remote_fk
+
+    @classmethod
     def parse_transaction_no(cls, ogm):
         return parse_transaction_no(ogm, cls.PAYMENT_TRACKING_PREFIX)
 
@@ -740,3 +847,41 @@ class TransactionPartyMixin(models.Model):
         obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
         prefix_str = '%s%09d' % (self.__class__.PAYMENT_TRACKING_PREFIX, obf)
         return ogm_from_prefix(prefix_str, formatted)
+
+    @cached_property
+    def debt_balance(self):
+        try:
+            return decimal_to_money(
+                getattr(self, TransactionPartyQuerySet.DEBT_BALANCE_FIELD)
+            )
+        except AttributeError:
+            # let's hope that you called this method with
+            # with_debt_annotations, otherwise RIP DB
+            # TODO: can we detect prefetched relations easily?
+            cls = self.__class__
+            return sum(
+                (d.balance for d in getattr(self, cls.DEBTS_RELATION).all()),
+                Money(0, settings.BOOKKEEPING_CURRENCY)
+            )
+
+    @cached_property
+    def debt_paid(self):
+        # see above
+        cls = self.__class__
+        return sum(
+            (d.amount_paid for d in getattr(self, cls.DEBTS_RELATION).all()),
+            Money(0, settings.BOOKKEEPING_CURRENCY)
+        )
+
+    @cached_property
+    def payment_total(self):
+        # this one needs with_payment_annotations to be efficient
+        cls = self.__class__
+        return sum(
+            (d.total_amount for d in getattr(self, cls.PAYMENTS_RELATION).all()),
+            Money(0, settings.BOOKKEEPING_CURRENCY)
+        )
+
+    @cached_property
+    def to_refund(self):
+        return self.payment_total - self.debt_paid
