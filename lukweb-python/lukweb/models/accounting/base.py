@@ -30,10 +30,46 @@ from ...utils import _dt_fallback, validated_bulk_query
 __all__ = [
     'DoubleBookModel', 'ConcreteAmountMixin', 'BaseDebtRecord',
     'BasePaymentRecord', 'BaseDebtQuerySet', 'BasePaymentQuerySet',
-    'BaseTransactionSplit', 'DoubleBookQuerySet', 'nonzero_money_validator'
+    'BaseTransactionSplit', 'DoubleBookQuerySet', 'nonzero_money_validator',
+    'GnuCashCategory'
 ]
 
 logger = logging.getLogger(__name__)
+
+
+class GnuCashCategory(models.Model):
+    # TODO: can we branch on whether citext is available or not?
+    # TODO: what kind of validation do we want here?
+    name = models.CharField(
+        max_length=255,
+        verbose_name=_('GnuCash category name'),
+        unique=True,
+    )
+
+    class Meta:
+        verbose_name = _('GnuCash category')
+        verbose_name_plural = _('GnuCash categories')
+        ordering = ('name',)
+
+    @classmethod
+    def get_category(cls, name, create=True):
+        if not name:
+            return None
+        if create:
+            obj, created = cls.objects.get_or_create(
+                name__iexact=name,
+                # need to set defaults when using __iexact
+                defaults={'name': name}
+            )
+        else:
+            try:
+                obj = cls.objects.get(name__iexact=name)
+            except cls.DoesNotExist:
+                obj = cls(name=name)
+        return obj
+
+    def __str__(self):
+        return self.name
 
 
 def nonzero_money_validator(money):
@@ -506,6 +542,14 @@ class BaseDebtRecord(DoubleBookModel):
         ),
         default=False,
         editable=False
+    )
+
+    gnucash_category = models.ForeignKey(
+        GnuCashCategory,
+        verbose_name=_('GnuCash category'),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
     )
 
     objects = BaseDebtQuerySet.as_manager()
