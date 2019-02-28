@@ -818,10 +818,11 @@ class TransactionPartyMixin(models.Model):
     PAYMENT_TRACKING_PREFIX = None
     DEBTS_RELATION = 'debts'
     PAYMENTS_RELATION = 'payments'
-    _debt_model = None
-    _payment_model = None
-    _debt_remote_fk = None
-    _payment_remote_fk = None
+    _debt_model: Type[BaseDebtRecord] = None
+    _payment_model: Type[BasePaymentRecord] = None
+    _split_model: Type[BaseDebtPaymentSplit] = None
+    _debt_remote_fk: str = None
+    _payment_remote_fk: str = None
 
     hidden_token = models.BinaryField(
         max_length=8,
@@ -854,6 +855,15 @@ class TransactionPartyMixin(models.Model):
             )
         cls._debt_remote_fk = debts_f.remote_field.name
         cls._payment_remote_fk = payments_f.remote_field.name
+        models_consistent = (
+            cls._debt_model.get_other_half_model() == cls._payment_model
+            and cls._payment_model.get_other_half_model() == cls._debt_model
+        )
+        if not models_consistent:
+            raise TypeError(
+                'Payment and debt ledger classes are inconsistent.'
+            )
+        cls._split_model = cls._debt_model.get_split_model()[0]
 
     @classmethod
     def get_debt_model(cls):
@@ -864,6 +874,11 @@ class TransactionPartyMixin(models.Model):
     def get_payment_model(cls):
         cls._annotate_model_metadata()
         return cls._payment_model
+
+    @classmethod
+    def get_split_model(cls):
+        cls._annotate_model_metadata()
+        return cls._split_model
 
     @classmethod
     def get_debt_remote_fk(cls):
