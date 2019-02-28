@@ -1,9 +1,10 @@
 import logging
 import re
 from decimal import Decimal
-from collections import defaultdict, namedtuple, deque
+from collections import defaultdict, deque
 from typing import (
-    TypeVar, Sequence, Generator, Type, Tuple, Iterator, Optional,
+    TypeVar, Sequence, Generator, Type, Tuple,
+    Iterator, Optional, Iterable,
 )
 
 from django import forms
@@ -18,6 +19,9 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
+from lukweb.models.accounting.base import (
+    TransactionPartyMixin, BaseDebtPaymentSplit
+)
 from ... import models
 from ...models.accounting import base as accounting_base
 from ...payments import decimal_to_money
@@ -363,18 +367,25 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
             'amount': Money(signature_used[1], settings.BOOKKEEPING_CURRENCY),
         }
 
+class ApportionmentResult:
+    def __init__(self, *, fully_used_payments=None, fully_paid_debts=None,
+                 remaining_payments=None, remaining_debts=None):
+        self.fully_used_payments = fully_used_payments or []
+        self.fully_paid_debts = fully_paid_debts or []
+        self.remaining_debts = remaining_debts or []
+        self.remaining_payments = remaining_payments or []
 
-ApportionmentResult = namedtuple(
-    'ApportionmentResult', (
-        'fully_used_payments',
-        'fully_paid_debts',
-        'remaining_payments',
-        'remaining_debts'
-    )
-)
+    def __iadd__(self, other):
+        if not isinstance(other, ApportionmentResult):
+            raise TypeError
+        self.fully_used_payments += other.fully_used_payments
+        self.fully_paid_debts += other.fully_paid_debts
+        self.remaining_debts += other.remaining_debts
+        self.remaining_payments += other.remaining_payments
+        return self
 
 
-ST = TypeVar('ST', bound=accounting_base.BaseDebtPaymentSplit)
+ST = TypeVar('ST', bound=BaseDebtPaymentSplit)
 def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
                         debts: Sequence[accounting_base.BaseDebtRecord],
                         split_model: Type[ST],
@@ -396,10 +407,7 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
     if debt_fk_name is None:
         debt_fk_name = split_model.get_debt_column()
 
-    results = ApportionmentResult(
-        fully_used_payments=[], fully_paid_debts=[],
-        remaining_payments=[], remaining_debts=[],
-    )
+    results = ApportionmentResult()
 
     # There might be a more efficient way, but let's not optimise prematurely
     if prioritise_exact_amount_match or exact_amount_match_only:
@@ -526,7 +534,7 @@ def refund_overpayment(
     ) -> Optional[
         Tuple[
             accounting_base.BaseDebtRecord,
-            Iterator[accounting_base.BaseDebtPaymentSplit]
+            Iterator[BaseDebtPaymentSplit]
         ]
     ]:
 
@@ -553,6 +561,7 @@ def refund_overpayment(
         kwargs.update(debt_kwargs)
     kwargs['is_refund'] = True
     refund_object = debt_model(**kwargs)
+    refund_object.clean()
     # total_amount may not be an actual field
     refund_object.total_amount = credit_to_refund
 
@@ -712,3 +721,101 @@ class FinancialCSVUploadForm(CSVUploadForm):
         with db_transaction.atomic():
             for formset in formsets:
                 formset.save()
+
+
+class BaseCreditApportionmentFormset(forms.BaseModelFormSet):
+    transaction_party_model: Type[TransactionPartyMixin] = None
+
+    def prepare_payment_instances(self) -> Tuple[
+        Iterable[int], Iterable[accounting_base.BasePaymentRecord]
+    ]:
+        raise NotImplementedError
+
+    def generate_splits(self, party) -> Generator[
+        BaseDebtPaymentSplit, None, ApportionmentResult
+    ]:
+        raise NotImplementedError
+
+    def post_debt_update(self, fully_paid_debts, remaining_debts):
+        pass
+
+    def save(self, commit=True):
+        from django.db import connection
+        can_bulk_save = connection.features.can_return_ids_from_bulk_insert
+        global_results = ApportionmentResult()
+        party_pks, all_payments = self.prepare_payment_instances()
+
+        party_qs = self.transaction_party_model.objects.filter(
+            pk__in=party_pks
+        ).with_debt_annotations()
+        financial_globals = models.FinancialGlobals.load()
+        refund_category = financial_globals.refund_credit_gnucash_acct
+        autogenerate_refunds = (
+            refund_category is not None
+            and financial_globals.autogenerate_refunds
+        )
+        debt_party_field = self.transaction_party_model.get_debt_remote_fk()
+        payment_model = self.transaction_party_model.get_payment_model()
+        debt_model = self.transaction_party_model.get_debt_model()
+
+        # save payments before building splits, otherwise the ORM
+        # will not set fk's correctly
+        if commit:
+            if can_bulk_save:
+                payment_model.objects.bulk_create(all_payments)
+            else:
+                logger.debug(
+                    'Database does not support RETURNING on bulk inserts. '
+                    'Fall back to saving in a loop.'
+                )
+                for payment in all_payments:
+                    payment.save()
+
+        def splits_to_create() -> Iterator[BaseDebtPaymentSplit]:
+            nonlocal global_results
+            refunds_to_save = []
+            refund_splits_to_save = []
+
+            for party in party_qs:
+                results = yield from self.generate_splits(party)
+                global_results += results
+
+                if autogenerate_refunds:
+                    debt_kwargs = {
+                        'gnucash_category': refund_category,
+                        debt_party_field: party
+                    }
+                    refund_data = refund_overpayment(
+                        results.remaining_payments,
+                        debt_kwargs=debt_kwargs
+                    )
+                    # we cannot yield from the refund splits here
+                    # since the refund object hasn't been saved yet
+                    if refund_data is not None:
+                        refund_object, refund_splits = refund_data
+                        if can_bulk_save:
+                            refunds_to_save.append(refund_object)
+                            refund_splits_to_save.append(refund_splits)
+                        else:
+                            if commit:
+                                refund_object.save()
+                            yield from refund_splits
+            if can_bulk_save:
+                # save all refund objects and create/yield all refund splits
+                if commit:
+                    debt_model.objects.bulk_create(refunds_to_save)
+                for splits in refund_splits_to_save:
+                    yield from splits
+
+        if commit:
+            self.transaction_party_model.get_split_model().objects.bulk_create(
+                splits_to_create()
+            )
+
+        # allow subclasses to hook into the ApportionmentResults
+        self.post_debt_update(
+            fully_paid_debts=global_results.fully_paid_debts,
+            remaining_debts=global_results.remaining_debts
+        )
+
+        return all_payments

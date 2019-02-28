@@ -2,7 +2,7 @@ import logging
 from collections import defaultdict
 from decimal import Decimal
 from itertools import chain
-from typing import Iterator
+from typing import Tuple, Iterable
 
 from django import forms
 from django.core.exceptions import SuspiciousOperation
@@ -13,10 +13,12 @@ from django.utils.translation import (
     ugettext_lazy as _, ugettext
 )
 
+from lukweb.models.accounting import base as accounting_base
 from . import bulk_utils
 from .base import *
 from .bulk_utils import (
-    make_payment_splits
+    make_payment_splits,
+    ApportionmentResult,
 )
 from ...payments import (DebtCSVParser, MiscDebtPaymentCSVParser)
 from .utils import GnuCashFieldMixin
@@ -49,13 +51,13 @@ class EphemeralPaymentForm(ModelForm):
 
     class Meta:
         model = models.InternalPayment
-        # we don't include the member field; this is intentional
+        # we don't include the member field as such; this is intentional
         # since we don't want the member records to be fetched at
         # the form level. Two reasons:
         #  (a) inefficient as fuck
         #  (b) we need to query them together with the debt data
         #      to generate the splits
-        fields = ('nature', 'total_amount', 'timestamp')
+        fields = ('nature', 'total_amount', 'timestamp', 'member_id')
 
 
 class EphemeralAddDebtForm(ModelForm):
@@ -68,7 +70,7 @@ class EphemeralAddDebtForm(ModelForm):
 
     class Meta:
         model = models.InternalDebtItem
-        fields = ('comment', 'total_amount', 'timestamp')
+        fields = ('comment', 'total_amount', 'timestamp', 'member_id')
 
 
 class ProfileAddDebtForm(GnuCashFieldMixin):
@@ -262,12 +264,12 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
 
 # This class can process both electronic transfers and
 # cash payments
-class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
+class BaseBulkPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
+    transaction_party_model = models.ChoirMember
 
-    # TODO: this kills deletion support, we should add that back in
-    def save(self, commit=True):
-        from django.db import connection
-        can_bulk_save = connection.features.can_return_ids_from_bulk_insert
+    def prepare_payment_instances(self) -> Tuple[
+        Iterable[int], Iterable[accounting_base.BasePaymentRecord]
+    ]:
         payments_by_member = defaultdict(lambda: defaultdict(list))
 
         filtered_mode = None
@@ -289,105 +291,53 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
             )
             payments_by_member[member_id][debt_filter].append(payment)
 
-        member_qs = models.ChoirMember.objects.filter(
-            pk__in=list(payments_by_member.keys())
-        ).with_debt_annotations()
+        self._payments_by_member = payments_by_member
+        self.filtered_mode = bool(filtered_mode)
 
-        financial_globals = models.FinancialGlobals.load()
-        refund_category = financial_globals.refund_credit_gnucash_acct
-        autogenerate_refunds = financial_globals.autogenerate_refunds
-        def filtered(member):
-            member_payments = payments_by_member[member.pk]
-            all_debts = member.debts.unpaid().order_by('timestamp')
-            debts_by_filter = defaultdict(list)
-            for debt in all_debts:
-                debts_by_filter[debt.filter_slug].append(debt)
-
-            remaining_payments = []
-            for filter_slug, pmts in member_payments.items():
-                # we handle unrestricted payments later
-                if filter_slug is None:
-                    raise SuspiciousOperation(
-                        '\'None\' filter slug found in filtered '
-                        'payment import. This shouldn\'t happen without '
-                        'tampering.'
-                    )
-                results = yield from make_payment_splits(
-                    payments=sorted(pmts, key=lambda p: p.timestamp),
-                    debts=debts_by_filter[filter_slug],
-                    split_model=models.InternalPaymentSplit
-                )
-                remaining_payments += results.remaining_payments
-            # we cannot yield from the refund splits here
-            # since the refund object hasn't been saved yet
-            if refund_category is not None and autogenerate_refunds:
-                return bulk_utils.refund_overpayment(
-                    remaining_payments, debt_kwargs={
-                    'member': member, 'gnucash_category': refund_category,
-                    'comment': ''
-                })
-
-        def unfiltered(member):
-            member_payments = payments_by_member[member.pk][None]
-            results = yield from make_payment_splits(
-                payments=sorted(member_payments, key=lambda p: p.timestamp),
-                debts=member.debts.unpaid().order_by('timestamp'),
-                split_model=models.InternalPaymentSplit
-            )
-            if refund_category is not None and autogenerate_refunds:
-                return bulk_utils.refund_overpayment(
-                    results.remaining_payments, debt_kwargs={
-                        'member': member, 'gnucash_category': refund_category,
-                        'comment': ''
-                    }
-                )
-            # we cannot yield from the refund splits here
-            # since the refund object hasn't been saved yet
-
-        split_generator = filtered if filtered_mode else unfiltered
-
-        # save payments before building splits, otherwise the ORM
-        # will not set fk's correctly
         def all_payments():
             for payment_set in payments_by_member.values():
                 yield from chain(*iter(payment_set.values()))
 
-        if commit:
-            if can_bulk_save:
-                models.InternalPayment.objects.bulk_create(all_payments())
-            else:
-                logger.debug(
-                    'Database does not support RETURNING on bulk inserts. '
-                    'Fall back to saving in a loop.'
+        return payments_by_member.keys(), list(all_payments())
+
+    def generate_filtered_splits(self, member):
+        all_results = ApportionmentResult()
+        member_payments = self._payments_by_member[member.pk]
+        all_debts = member.debts.unpaid().order_by('timestamp')
+        debts_by_filter = defaultdict(list)
+        for debt in all_debts:
+            debts_by_filter[debt.filter_slug].append(debt)
+
+        for filter_slug, pmts in member_payments.items():
+            # we handle unrestricted payments later
+            if filter_slug is None:
+                raise SuspiciousOperation(
+                    '\'None\' filter slug found in filtered '
+                    'payment import. This shouldn\'t happen without '
+                    'tampering.'
                 )
-                for payment in all_payments():
-                    payment.save()
+            results = yield from make_payment_splits(
+                payments=sorted(pmts, key=lambda p: p.timestamp),
+                debts=debts_by_filter[filter_slug],
+                split_model=models.InternalPaymentSplit
+            )
+            all_results += results
 
-        def splits_to_create() -> Iterator[models.InternalPaymentSplit]:
-            refunds_to_save = []
-            refund_splits_to_save = []
+        return all_results
 
-            for member in member_qs:
-                refund_data = yield from split_generator(member)
-                if refund_data is not None:
-                    refund_object, refund_splits = refund_data
-                    if can_bulk_save:
-                        refunds_to_save.append(refund_object)
-                        refund_splits_to_save.append(refund_splits)
-                    else:
-                        refund_object.save()
-                        yield from refund_splits
+    def generate_unfiltered_splits(self, member):
+        member_payments = self._payments_by_member[member.pk][None]
+        return make_payment_splits(
+            payments=sorted(member_payments, key=lambda p: p.timestamp),
+            debts=member.debts.unpaid().order_by('timestamp'),
+            split_model=models.InternalPaymentSplit
+        )
 
-            if can_bulk_save:
-                # save all refund objects and create/yield all refund splits
-                models.InternalDebtItem.objects.bulk_create(refunds_to_save)
-                for splits in refund_splits_to_save:
-                    yield from splits
-
-        if commit:
-            models.InternalPaymentSplit.objects.bulk_create(splits_to_create())
-
-        return all_payments()
+    def generate_splits(self, party):
+        if self.filtered_mode:
+            return self.generate_filtered_splits(party)
+        else:
+            return self.generate_unfiltered_splits(party)
 
 
 BulkPaymentFormSet = modelformset_factory(
