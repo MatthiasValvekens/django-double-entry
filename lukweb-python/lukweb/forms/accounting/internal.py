@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from decimal import Decimal
 from itertools import chain
@@ -14,6 +15,7 @@ from django.utils.translation import (
 )
 
 from lukweb.models.accounting import base as accounting_base
+from lukweb.models.accounting.base import TransactionPartyMixin
 from . import bulk_utils
 from .base import *
 from .bulk_utils import (
@@ -202,7 +204,176 @@ def lookup_act_registration_ids(member_ids_by_activity: dict):
     unseen = all_pairs - result.keys()
     return result, unseen
 
-class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
+
+UID_FORMAT = re.compile(
+    r'(?P<uid>\d+)(:(?P<token>\d+-[a-z0-9]+-[0-9a-f]{20})'
+    ':(?P<salt>[-_A-Za-z0-9]+))?'
+)
+
+class ByEmailIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
+
+    @classmethod
+    def lookup_key_for_account(cls, account):
+        return account.user.email
+
+    def append(self, tinfo):
+        string = tinfo.account_lookup_str
+        if '@' in string:
+            self.transaction_index[string].append(tinfo)
+            return True
+        else:
+            return False
+
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        member_email_qs, unseen = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().by_emails(
+            self.transaction_index.keys(), validate_unseen=True
+        )
+
+        for email in unseen:
+            ts = self.transaction_index[email]
+            self.ledger_preparator.unknown_account(
+                email, [t.line_no for t in ts]
+            )
+        return member_email_qs
+
+
+class ByNameIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
+
+    @classmethod
+    def lookup_key_for_account(cls, account):
+        return account.full_name
+
+    def append(self, tinfo):
+        # this method isn't picky
+        string = tinfo.account_lookup_str
+        self.transaction_index[string].append(tinfo)
+        return True
+
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        member_name_qs, unseen, duplicates = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().by_full_names(
+            self.transaction_index.keys(),
+            validate_unseen=True, validate_nodups=True
+        )
+
+        for name in unseen:
+            ts = self.transaction_index[name.casefold()]
+            self.ledger_preparator.unknown_account(name, [t.line_no for t in ts])
+
+        for name in duplicates:
+            ts = self.transaction_index[name.casefold()]
+            self.ledger_preparator.ambiguous_account(
+                name, [t.line_no for t in ts]
+            )
+
+        return member_name_qs
+
+class ByUIDIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
+
+    @classmethod
+    def lookup_key_for_account(cls, party):
+        return str(party.pk)
+
+    def append(self, tinfo):
+        string = tinfo.account_lookup_str
+        match = UID_FORMAT.match(string)
+        if match is None:
+            return False
+        # if the validation token is left out, we trust that
+        # the operator knows what they're doing
+        token = match.group('token')
+        uid_str = match.group('uid')
+        uid = int(uid_str)
+        if token is not None:
+            self.transaction_index[uid].append(
+                tinfo, (token, match.group('salt'))
+            )
+        else:
+            self.transaction_index[uid].append((tinfo, None))
+        # save canonical version of the lookup str
+        tinfo.account_lookup_str = uid_str
+        return True
+
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        member_uid_qs = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().filter(
+            pk__in=self.transaction_index.keys()
+        )
+        for m in member_uid_qs:
+            tinfos = self.transaction_index[m.pk]
+            for info, validation in tinfos:
+                if validation is not None:
+                    token, salt = validation
+                    token_valid = m.validate_external_uid_token(
+                        external_form_salt=salt, bare_token=token
+                    )
+                    if not token_valid:
+                        self.ledger_preparator.error_at_line(
+                            info.line_no,
+                            _(
+                                'Token %(token)s is invalid for uid %(uid)d '
+                                'with salt value %(salt)s. Skipped processing.'
+                            ), params={
+                                'token': token, 'uid': m.pk, 'salt': salt,
+                            }
+                        )
+                        # This will cause the transaction to be eliminated
+                        # during the ledger preparation stage
+                        info.account_lookup_str = None
+
+        unseen_uids = self.transaction_index.keys() - set(
+            m.pk for m in member_uid_qs
+        )
+        for pk in unseen_uids:
+            ts = self.transaction_index[pk]
+            self.ledger_preparator.unknown_account(
+                str(pk), [t.line_no for t, v in ts]
+            )
+        return member_uid_qs
+
+
+class FetchMembersMixin(bulk_utils.FetchTransactionAccountsMixin):
+    transaction_account_model = models.ChoirMember
+    lookup_builder_classes = [
+        ByUIDIndexBuilder, ByEmailIndexBuilder, ByNameIndexBuilder
+    ]
+
+    unknown_account_message = _(
+        '%(party)s does not designate a registered member.'
+    )
+
+    ambiguous_account_message = _(
+        '%(party)s designates multiple registered members. '
+        'Skipped processing.',
+    )
+
+    # TODO: In the long term I would like to get rid of these eph
+    # forms as well. That should be a bit easier to plan with the
+    # new bulk_utils module.
+    def form_kwargs_for_transaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        member = transaction.ledger_entry.member
+        kwargs['member_id'] = member.pk
+        kwargs['name'] = member.full_name
+        kwargs['email'] = member.user.email
+        return kwargs
+
+    def model_kwargs_for_transaction(self, transaction):
+        kwargs = super().model_kwargs_for_transaction(transaction)
+        if kwargs is None:
+            return None
+        try:
+            member = self._by_lookup_str[transaction.payment_lookup_str]
+            kwargs['member'] = member
+            return kwargs
+        except KeyError:
+            # member search errors have already been logged
+            # in the preparation step, so we don't care
+            return None
+
+
+class InternalDebtRecordPreparator(FetchMembersMixin):
     formset_prefix = 'bulk-add-debt'
     formset_class = BulkAddDebtFormSet
     model = models.InternalDebtItem
@@ -214,7 +385,7 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
         for info in self.transactions:
             if info.activity_id is None:
                 continue
-            mem = self.get_member(member_str=info.member_str)
+            mem = self.get_account(lookup_str=info.account_lookup_str)
             by_activity_id[info.activity_id].append(mem.pk)
         self._actreg_index, notfound = lookup_act_registration_ids(
             by_activity_id
@@ -226,7 +397,7 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
                     'Member %(member)s with id %(member_id)d appears not to '
                     'be registered for activity with id %(act_id)d.'
                 ), params={
-                    'member': self.get_member(pk=member_id),
+                    'member': self.get_account(pk=member_id),
                     'member_id': member_id,
                     'act_id': activity_id
                 }
@@ -265,7 +436,7 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
 # This class can process both electronic transfers and
 # cash payments
 class BaseBulkPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
-    transaction_party_model = models.ChoirMember
+    transaction_account_model = models.ChoirMember
 
     def prepare_payment_instances(self) -> Tuple[
         Iterable[int], Iterable[accounting_base.BasePaymentRecord]
@@ -347,7 +518,7 @@ BulkPaymentFormSet = modelformset_factory(
 )
 
 
-class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
+class MiscDebtPaymentPreparator(FetchMembersMixin,
                                 bulk_utils.DuplicationProtectedPreparator,
                                 bulk_utils.CreditApportionmentMixin):
 
@@ -386,7 +557,7 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
         # get human-readable value
         nature_choices = dict(models.InternalPayment.PAYMENT_NATURE_CHOICES)
         params['nature'] = nature_choices[signature_used[2]]
-        params['member'] = str(self.get_member(pk=signature_used[3]))
+        params['member'] = str(self.get_account(pk=signature_used[3]))
         return params
 
     def form_kwargs_for_transaction(self, transaction):
@@ -441,10 +612,10 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
         params = super().overpayment_error_params(debt_key, *args)
         if self.filtered_mode:
             member_id, filter_slug = debt_key
-            params['member'] = str(self.get_member(pk=member_id))
+            params['member'] = str(self.get_account(pk=member_id))
             params['filter_slug'] = filter_slug
         else:
-            params['member'] = str(self.get_member(pk=debt_key))
+            params['member'] = str(self.get_account(pk=debt_key))
         return params
 
     def transaction_buckets(self):
@@ -464,7 +635,7 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
                 trans_buckets[member_id].append(t)
 
         debt_qs = models.InternalDebtItem.objects.filter(
-            member_id__in=self.member_ids()
+            member_id__in=self.account_ids()
         ).with_payments().unpaid().order_by('timestamp')
 
         debt_buckets = defaultdict(list)

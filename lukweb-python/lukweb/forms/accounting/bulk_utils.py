@@ -1,10 +1,9 @@
 import logging
-import re
 from decimal import Decimal
 from collections import defaultdict, deque
 from typing import (
     TypeVar, Sequence, Generator, Type, Tuple,
-    Iterator, Optional, Iterable,
+    Iterator, Optional, Iterable, List,
 )
 
 from django import forms
@@ -142,170 +141,102 @@ class LedgerEntryPreparator(ParserErrorMixin):
         return self._formset
 
 
-UID_FORMAT = re.compile(
-    r'(?P<uid>\d+)(:(?P<token>\d+-[a-z0-9]+-[0-9a-f]{20})'
-    ':(?P<salt>[-_A-Za-z0-9]+))?'
-)
+class TransactionPartyIndexBuilder:
+    def __init__(self, ledger_preparator):
+        self.transaction_index = defaultdict(list)
+        self.ledger_preparator: FetchTransactionAccountsMixin = ledger_preparator
 
-class FetchMembersMixin(LedgerEntryPreparator):
+    @classmethod
+    def lookup_key_for_account(cls, account):
+        raise NotImplementedError
 
-    _members_by_str = None
-    _members_by_id = None
+    def append(self, tinfo):
+        raise NotImplementedError
 
-    def unknown_member(self, member_str, line_nos):
-        msg = _(
-            '%(member_str)s does not designate a registered member.'
-        )
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        raise NotImplementedError
 
-        self.error_at_lines(
-            line_nos, msg, params={'member_str': member_str}
-        )
+    def populate_id_index(self):
+        parties = self.execute_query()
+        for p in parties:
+            self.ledger_preparator._by_id[p.pk] = p
+            self.ledger_preparator._by_lookup_str[
+                self.__class__.lookup_key_for_account(p)
+            ] = p
 
-    def get_member(self, *, pk=None, member_str=None):
+
+class FetchTransactionAccountsMixin(LedgerEntryPreparator):
+    transaction_party_model: Type[TransactionPartyMixin]
+    lookup_builder_classes: List[Type[TransactionPartyIndexBuilder]]
+
+    unknown_account_message = _(
+        'Transaction account %(account)s unknown. '
+        'Skipped processing.'
+    )
+
+    ambiguous_account_message = _(
+        'Designation %(account)s could refer to multiple accounts. '
+        'Skipped processing.'
+    )
+
+    unparseable_account_message = _(
+        'Designation %(account)s could not be parsed. '
+        'Skipped processing.'
+    )
+
+    _by_id = None
+    _by_lookup_str = None
+
+    def get_account(self, *, pk=None, lookup_str=None):
         if pk is not None:
-            return self._members_by_id[pk]
-        elif member_str is not None:
-            return self._members_by_str[member_str]
-        raise ValueError('You must supply either pk or member_str')
+            return self._by_id[pk]
+        elif lookup_str is not None:
+            return self._by_lookup_str[lookup_str]
+        raise ValueError('You must supply either pk or lookup_str')
 
-    def member_ids(self):
-        return self._members_by_id.keys()
+    def account_ids(self):
+        return self._by_id.keys()
 
-    def prepare(self): 
+    def unknown_account(self, account_lookup_str, line_nos):
+        self.error_at_lines(
+            line_nos, self.unknown_account_message,
+            params={'account': account_lookup_str}
+        )
+
+    def ambiguous_account(self, account_lookup_str, line_nos):
+        self.error_at_lines(
+            line_nos, self.ambiguous_account_message,
+            params={'account': account_lookup_str}
+        )
+
+    def unparseable_account(self, account_lookup_str, line_no):
+        self.error_at_line(
+            line_no, self.unparseable_account_message,
+            params={'account': account_lookup_str}
+        )
+
+    def prepare(self):
         super().prepare()
-        # split the transaction list into email and name indices
-        email_index = defaultdict(list)
-        name_index = defaultdict(list)
-        uid_index = defaultdict(list)
+        self._by_id = dict()
+        self._by_lookup_str = dict()
+        lookup_builders = [
+           tpib_class(self) for tpib_class in self.lookup_builder_classes
+        ]
         for info in self.transactions:
-            match = UID_FORMAT.match(info.member_str)
-            if match is None:
-                if '@' in info.member_str:
-                    email_index[info.member_str].append(info)
-                else:
-                    name_index[info.member_str.casefold()].append(info)
-            else:
-                # if the validation token is left out, we trust that
-                # the operator knows what they're doing
-                uid_str = match.group('uid')
-                uid = int(uid_str)
-                token = match.group('token')
-                if token is not None:
-                    uid_index[uid].append(
-                        (info, (token, match.group('salt')))
-                    )
-                else:
-                    uid_index[uid].append((info, None))
-                # save canonical version of the member_str
-                info.member_str = uid_str
-
-        self._members_by_str = dict()
-        self._members_by_id = dict()
-
-        member_uid_qs = models.ChoirMember.objects \
-            .select_related('user').with_debt_annotations().filter(
-                pk__in=uid_index.keys()
-            )
-        for m in member_uid_qs:
-            tinfos = uid_index[m.pk]
-            for info, validation in tinfos:
-                if validation is not None:
-                    token, salt = validation
-                    token_valid = m.validate_external_uid_token(
-                        external_form_salt=salt, bare_token=token
-                    )
-                    if not token_valid:
-                        self.error_at_line(
-                            info.line_no,
-                            _(
-                                'Token %(token)s is invalid for uid %(uid)d '
-                                'with salt value %(salt)s. Skipped processing.'
-                            ), params={
-                                'token': token, 'uid': m.pk, 'salt': salt,
-                            }
-                        )
-                        # This will cause the transaction to be eliminated
-                        # during the ledger preparation stage
-                        info.member_str = None
-                        continue
-                self._members_by_id[m.pk] = m
-                self._members_by_str[info.member_str] = m
-
-        unseen_uids = uid_index.keys() - set(m.pk for m in member_uid_qs)
-        for pk in unseen_uids:
-            ts = uid_index[pk]
-            self.unknown_member(str(pk), [t.line_no for t, v in ts])
-
-        member_email_qs, unseen = models.ChoirMember.objects \
-            .select_related('user').with_debt_annotations().by_emails(
-                email_index.keys(), validate_unseen=True
-            )
-
-        for email in unseen:
-            ts = email_index[email]
-            self.unknown_member(email, [t.line_no for t in ts])
-
-        member_name_qs, unseen, duplicates = models.ChoirMember.objects \
-            .select_related('user').with_debt_annotations().by_full_names(
-                name_index.keys(), validate_unseen=True, validate_nodups=True
-            )
-
-        for name in unseen:
-            ts = name_index[name.casefold()]
-            self.unknown_member(name, [t.line_no for t in ts])
-
-        for name in duplicates:
-            ts = name_index[name.casefold()]
-            msg = _(
-                '%(member_str)s designates multiple registered members. '
-                'Skipped processing.',
-            )
-            self.error_at_lines(
-                [t.line_no for t in ts], msg, params={'member_str': name},
-            )
-
-        # build member dictionaries
-        for m in member_email_qs:
-            member_str = m.user.email
-            self._members_by_str[member_str] = m
-            self._members_by_id[m.pk] = m
-
-        for m in member_name_qs:
-            member_str = m.full_name
-            imember_str = member_str.casefold()
-            if imember_str not in duplicates:
-                self._members_by_str[member_str] = m
-                self._members_by_id[m.pk] = m
+            appended = False
+            for builder in lookup_builders:
+                appended |= builder.append(info)
+                if appended:
+                    break
+            if not appended:
+                self.unparseable_account_message(
+                    info.account_lookup_str, info.line_no
+                )
 
         # It's technically more efficient to keep the transaction dicts around
         # to refer to later, but since later calls to validate_global might
-        # shrink the list of valid transactions, this is a bad idea for 
+        # shrink the list of valid transactions, this is a bad idea for
         # maintainability. Amdahl.
-
-    # TODO: In the long term I would like to get rid of these eph
-    # forms as well. That should be a bit easier to plan with the
-    # new bulk_utils module.
-    def form_kwargs_for_transaction(self, transaction):
-        kwargs = super().form_kwargs_for_transaction(transaction)
-        member = transaction.ledger_entry.member
-        kwargs['member_id'] = member.pk
-        kwargs['name'] = member.full_name
-        kwargs['email'] = member.user.email
-        return kwargs
-    
-    def model_kwargs_for_transaction(self, transaction):
-        kwargs = super().model_kwargs_for_transaction(transaction)
-        if kwargs is None:
-            return None
-        try:
-            member = self._members_by_str[transaction.member_str]
-            kwargs['member'] = member
-            return kwargs
-        except KeyError: 
-            # member search errors have already been logged
-            # in the preparation step, so we don't care
-            return None
-
 
 class DuplicationProtectedPreparator(LedgerEntryPreparator):
     single_dup_message = None
@@ -366,6 +297,7 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
             'date': signature_used[0],
             'amount': Money(signature_used[1], settings.BOOKKEEPING_CURRENCY),
         }
+
 
 class ApportionmentResult:
     def __init__(self, *, fully_used_payments=None, fully_paid_debts=None,
@@ -672,6 +604,53 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
             self.simulate_apportionments(key, debts, transactions)
 
 
+class StandardCreditApportionmentMixin(CreditApportionmentMixin,
+                                       FetchTransactionAccountsMixin):
+
+    def transaction_buckets(self):
+        trans_buckets = defaultdict(list)
+        # TODO: get the column name directly, because this isn't 100% reliable,
+        #  though it will do for now.
+        payment_fk_name = '%s_id' % (
+            self.transaction_party_model.get_payment_remote_fk()
+        )
+        debt_fk_name = '%s_id' % (
+            self.transaction_party_model.get_debt_remote_fk()
+        )
+        for t in self.valid_transactions:
+            account_id = getattr(t.ledger_entry, payment_fk_name)
+            trans_buckets[account_id].append(t)
+        base_qs = self.transaction_party_model.get_debt_model()._default_manager
+
+        debt_qs = base_qs.filter(**{
+            '%s__in' % debt_fk_name: self.account_ids()
+        }).with_payments().unpaid().order_by('timestamp')
+
+        debt_buckets = defaultdict(list)
+        for debt in debt_qs:
+            debt_buckets[getattr(debt, debt_fk_name)].append(debt)
+
+        self._debt_buckets = debt_buckets
+
+        return trans_buckets
+
+    def debts_for(self, debt_key):
+        return self._debt_buckets[debt_key]
+
+    def model_kwargs_for_transaction(self, transaction):
+        kwargs = super().model_kwargs_for_transaction(transaction)
+        if kwargs is None:
+            return None
+        try:
+            account = self._by_lookup_str[transaction.account_lookup_str]
+            kwargs[self.transaction_party_model.get_payment_remote_fk()] = account
+            return kwargs
+        except KeyError:
+            # member search errors have already been logged
+            # in the preparation step, so we don't care
+            return None
+
+
 class FinancialCSVUploadForm(CSVUploadForm):
     ledger_preparator_classes = ()
     upload_field_label = None
@@ -731,7 +710,7 @@ class BaseCreditApportionmentFormset(forms.BaseModelFormSet):
     ]:
         raise NotImplementedError
 
-    def generate_splits(self, party) -> Generator[
+    def generate_splits(self, account) -> Generator[
         BaseDebtPaymentSplit, None, ApportionmentResult
     ]:
         raise NotImplementedError
@@ -743,10 +722,10 @@ class BaseCreditApportionmentFormset(forms.BaseModelFormSet):
         from django.db import connection
         can_bulk_save = connection.features.can_return_ids_from_bulk_insert
         global_results = ApportionmentResult()
-        party_pks, all_payments = self.prepare_payment_instances()
+        account_pks, all_payments = self.prepare_payment_instances()
 
-        party_qs = self.transaction_party_model.objects.filter(
-            pk__in=party_pks
+        account_qs = self.transaction_party_model.objects.filter(
+            pk__in=account_pks
         ).with_debt_annotations()
         financial_globals = models.FinancialGlobals.load()
         refund_category = financial_globals.refund_credit_gnucash_acct
@@ -754,7 +733,7 @@ class BaseCreditApportionmentFormset(forms.BaseModelFormSet):
             refund_category is not None
             and financial_globals.autogenerate_refunds
         )
-        debt_party_field = self.transaction_party_model.get_debt_remote_fk()
+        debt_account_field = self.transaction_party_model.get_debt_remote_fk()
         payment_model = self.transaction_party_model.get_payment_model()
         debt_model = self.transaction_party_model.get_debt_model()
 
@@ -776,14 +755,14 @@ class BaseCreditApportionmentFormset(forms.BaseModelFormSet):
             refunds_to_save = []
             refund_splits_to_save = []
 
-            for party in party_qs:
-                results = yield from self.generate_splits(party)
+            for account in account_qs:
+                results = yield from self.generate_splits(account)
                 global_results += results
 
                 if autogenerate_refunds:
                     debt_kwargs = {
                         'gnucash_category': refund_category,
-                        debt_party_field: party
+                        debt_account_field: account
                     }
                     refund_data = refund_overpayment(
                         results.remaining_payments,

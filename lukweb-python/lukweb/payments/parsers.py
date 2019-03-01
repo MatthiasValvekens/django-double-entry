@@ -149,9 +149,9 @@ class MemberTransactionParser(FinancialCSVParser):
     member_column_name = 'lid'
 
     class TransactionInfo(FinancialCSVParser.TransactionInfo):
-        def __init__(self, *, member_str, **kwargs):
+        def __init__(self, *, account_lookup_str, **kwargs):
             super().__init__(**kwargs)
-            self.member_str = member_str
+            self.account_lookup_str = account_lookup_str
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)

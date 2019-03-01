@@ -177,7 +177,6 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
     def debts_for(self, debt_key):
         return self._debt_buckets[debt_key]
 
-
 class BulkTransferUploadForm(bulk_utils.FinancialCSVUploadForm):
     ledger_preparator_classes = (DebtTransferPaymentPreparator,)
     upload_field_label = _('Electronic transfers (.csv)')
