@@ -1,5 +1,5 @@
 import logging
-from collections import defaultdict
+from typing import Iterable
 
 from django.shortcuts import render
 from django.utils.functional import cached_property
@@ -7,6 +7,7 @@ from django.utils.translation import (
     ugettext_lazy as _, ugettext,
 )
 
+from lukweb.models.accounting.base import TransactionPartyMixin
 from . import internal, bulk_utils
 from ... import payments, models
 
@@ -24,10 +25,17 @@ __all__ = ['BulkTransferUploadForm']
 # lookbehind doesn't work, since we don't want to constrain the
 # prefix to a fixed length
 
+class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
 
-class TransferRecordPreparator(bulk_utils.LedgerEntryPreparator):
-    
     prefix_digit = None
+
+    def __init__(self, ledger_preparator, prefix_digit):
+        super().__init__(ledger_preparator)
+        self.prefix_digit = prefix_digit
+
+    @classmethod
+    def lookup_key_for_account(cls, account):
+        return account.payment_tracking_no
 
     def ogm_applies(self, ogm):
         try:
@@ -36,24 +44,47 @@ class TransferRecordPreparator(bulk_utils.LedgerEntryPreparator):
         except ValueError:
             return False
 
-    def model_kwargs_for_transaction(self, transaction):
-        if not self.ogm_applies(transaction.ogm):
-            return None
-        return super().model_kwargs_for_transaction(transaction)
+    def append(self, tinfo):
+        string = tinfo.account_lookup_str
+        if not self.ogm_applies(string):
+            return False
+        else:
+            self.transaction_index[string].append(tinfo)
+            return True
+
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        account_qs, unseen = self.ledger_preparator.transaction_party_model \
+            ._default_manager.with_debt_balances().select_related('user') \
+            .by_payment_tracking_nos(
+            self.transaction_index.keys(), validate_unseen=True
+        )
+
+        # We don't show this error in the interface, since
+        # if the OGM validates properly AND is not found in our system,
+        # it probably simply corresponds to a transaction that we don't
+        # care about
+        if unseen:
+            logger.debug(
+                'OGMs not corresponding to valid user records: %s.',
+                ', '.join(unseen)
+            )
+        return account_qs
 
 
-class DebtTransferPaymentPreparator(TransferRecordPreparator,
-                                    bulk_utils.DuplicationProtectedPreparator,
-                                    bulk_utils.CreditApportionmentMixin):
+class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin,
+                                bulk_utils.DuplicationProtectedPreparator):
 
-    model = models.InternalPayment
-    formset_class = internal.BulkPaymentFormSet
-    split_model = models.InternalPaymentSplit
-    formset_prefix = 'bulk-debt-transfers'
-    prefix_digit = payments.OGM_INTERNAL_DEBT_PREFIX
+    prefix_digit = None
+
+    def get_lookup_builders(self):
+        return [
+            TransferTransactionIndexBuilder(
+                self, prefix_digit=self.prefix_digit
+            )
+        ]
 
     multiple_dup_message = _(
-        'A bank transfer payment by %(member)s '
+        'A bank transfer payment by %(account)s '
         'for amount %(amount)s on date %(date)s appears %(hist)d time(s) '
         'in history, and %(import)d time(s) in '
         'the current batch of data. '
@@ -61,7 +92,7 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
     )
 
     single_dup_message = _(
-        'A bank transfer payment by %(member)s '
+        'A bank transfer payment by %(account)s '
         'for amount %(amount)s on date %(date)s already appears '
         'in the payment history. '
         'Resolution: likely duplicate, skipped processing.'
@@ -83,7 +114,7 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
 
     def overpayment_error_params(self, debt_key, *args):
         params = super().overpayment_error_params(debt_key, *args)
-        params['member'] = str(self._members_by_id[debt_key])
+        params['member'] = str(self._by_id[debt_key])
         return params
 
     @cached_property
@@ -100,82 +131,40 @@ class DebtTransferPaymentPreparator(TransferRecordPreparator,
         else:
             return super().refund_message
 
+class DebtTransferPaymentPreparator(TransferPaymentPreparator):
+
+    formset_class = internal.BulkPaymentFormSet
+    formset_prefix = 'bulk-debt-transfers'
+    prefix_digit = payments.OGM_INTERNAL_DEBT_PREFIX
+    transaction_party_model = models.ChoirMember
+
     def dup_error_params(self, signature_used):
         # TODO: don't use magic numbers that depend on the order of
         # dupcheck_signature_fields on the model
         params = super().dup_error_params(signature_used)
-        params['member'] = str(self._members_by_id[signature_used[3]])
+        params['account'] = str(self._by_id[signature_used[3]])
         return params
 
     def model_kwargs_for_transaction(self, transaction):
         kwargs = super().model_kwargs_for_transaction(transaction)
         if kwargs is None:
             return None
-        pk = models.ChoirMember.parse_transaction_no(transaction.ogm)
-        member = self._members_by_id[pk]
-        # the pk part might match accidentally
-        # so we check the hidden token digest too.
-        # This shouldn't really matter all that much 
-        # in the current implementation, but it can't hurt.
-        if transaction.ogm != member.payment_tracking_no:
-            return None
-        kwargs['member'] = member
         kwargs['nature'] = payments.PAYMENT_NATURE_TRANSFER
         return kwargs
 
     def form_kwargs_for_transaction(self, transaction):
         kwargs = super().form_kwargs_for_transaction(transaction)
         member = transaction.ledger_entry.member
-        kwargs['ogm'] = transaction.ogm
+        kwargs['ogm'] = transaction.account_lookup_str
         kwargs['member_id'] = member.pk
         kwargs['name'] = member.full_name
         kwargs['email'] = member.user.email
         kwargs['nature'] = payments.PAYMENT_NATURE_TRANSFER
-        return kwargs 
-
-    def prepare(self):
-        ogms_to_query = [
-            t.ogm for t in self.transactions if self.ogm_applies(t.ogm)
-        ]
-
-        member_qs, unseen = models.ChoirMember.objects.with_debt_balances()\
-            .select_related('user').by_payment_tracking_nos(
-                ogms_to_query, validate_unseen=True
-            )
-
-        # We don't show this error in the interface, since
-        # if the OGM validates properly AND is not found in our system,
-        # it probably simply corresponds to a transaction that we don't
-        # care about
-        if unseen:
-            logger.debug(
-                'OGMs not corresponding to valid user records: %s.', 
-                ', '.join(unseen)
-            )
-
-        self._members_by_id = {
-            member.pk: member for member in member_qs
-        }
-
-    def transaction_buckets(self):
-        trans_buckets = defaultdict(list)
-        for t in self.valid_transactions:
-            member_id = t.ledger_entry.member.pk
-            trans_buckets[member_id].append(t)
-        debt_qs = models.InternalDebtItem.objects.filter(
-            member_id__in=self._members_by_id.keys()
-        ).with_payments().unpaid().order_by('timestamp')
-
-        debt_buckets = defaultdict(list)
-        for debt in debt_qs:
-            debt_buckets[debt.member_id].append(debt)
-
-        self._debt_buckets = debt_buckets
-
-        return trans_buckets
+        return kwargs
 
     def debts_for(self, debt_key):
         return self._debt_buckets[debt_key]
+
 
 class BulkTransferUploadForm(bulk_utils.FinancialCSVUploadForm):
     ledger_preparator_classes = (DebtTransferPaymentPreparator,)

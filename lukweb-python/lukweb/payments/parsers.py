@@ -28,11 +28,12 @@ class FinancialCSVParser:
     date_column_name= 'datum'
 
     class TransactionInfo:
-        def __init__(self, *, line_no, amount, timestamp):
+        def __init__(self, *, line_no, amount, timestamp, account_lookup_str):
             self.ledger_entry = None
             self.line_no = line_no
             self.amount = amount
             self.timestamp = _dt_fallback(timestamp)
+            self.account_lookup_str = account_lookup_str
 
     def __init__(self, csv_file):
         self.csv_file = csv_file
@@ -145,21 +146,18 @@ class FinancialCSVParser:
             return None
 
 
-class MemberTransactionParser(FinancialCSVParser):
-    member_column_name = 'lid'
-
-    class TransactionInfo(FinancialCSVParser.TransactionInfo):
-        def __init__(self, *, account_lookup_str, **kwargs):
-            super().__init__(**kwargs)
-            self.account_lookup_str = account_lookup_str
+class AccountColumnTransactionParser(FinancialCSVParser):
+    account_column_name = 'account'
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
         if parsed is None:
             return None
-        parsed['member_str'] = row[self.member_column_name]
+        parsed['account_lookup_str'] = row[self.account_column_name]
         return parsed
 
+class MemberTransactionParser(AccountColumnTransactionParser):
+    account_column_name = 'lid'
 
 class PaymentCSVParser(FinancialCSVParser):
 
@@ -276,11 +274,6 @@ class BankCSVParser(PaymentCSVParser):
 
     verbose_name = None
 
-    class TransactionInfo(PaymentCSVParser.TransactionInfo):
-        def __init__(self, *, ogm, **kwargs):
-            super().__init__(**kwargs)
-            self.ogm = ogm
-
     def get_nature(self, line_no, row):
         return PAYMENT_NATURE_TRANSFER
 
@@ -294,7 +287,7 @@ class BankCSVParser(PaymentCSVParser):
         ogm = self.get_ogm(line_no, row)
         if ogm is None:
             return None
-        parsed['ogm'] = ogm
+        parsed['account_lookup_str'] = ogm
         return parsed
 
 

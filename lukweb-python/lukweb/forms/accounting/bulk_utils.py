@@ -3,7 +3,8 @@ from decimal import Decimal
 from collections import defaultdict, deque
 from typing import (
     TypeVar, Sequence, Generator, Type, Tuple,
-    Iterator, Optional, Iterable, List,
+    Iterator, Optional, Iterable,
+    cast,
 )
 
 from django import forms
@@ -38,7 +39,7 @@ originating from .csv files
 
 
 class LedgerEntryPreparator(ParserErrorMixin):
-    model = None 
+    model: accounting_base.DoubleBookModel = None
     formset_class = None
     formset_prefix = None
     _valid_transactions = None
@@ -156,9 +157,8 @@ class TransactionPartyIndexBuilder:
     def execute_query(self) -> Iterable[TransactionPartyMixin]:
         raise NotImplementedError
 
-    def populate_id_index(self):
-        parties = self.execute_query()
-        for p in parties:
+    def populate_indexes(self):
+        for p in self.execute_query():
             self.ledger_preparator._by_id[p.pk] = p
             self.ledger_preparator._by_lookup_str[
                 self.__class__.lookup_key_for_account(p)
@@ -167,7 +167,6 @@ class TransactionPartyIndexBuilder:
 
 class FetchTransactionAccountsMixin(LedgerEntryPreparator):
     transaction_party_model: Type[TransactionPartyMixin]
-    lookup_builder_classes: List[Type[TransactionPartyIndexBuilder]]
 
     unknown_account_message = _(
         'Transaction account %(account)s unknown. '
@@ -186,6 +185,9 @@ class FetchTransactionAccountsMixin(LedgerEntryPreparator):
 
     _by_id = None
     _by_lookup_str = None
+
+    def get_lookup_builders(self):
+        raise NotImplementedError
 
     def get_account(self, *, pk=None, lookup_str=None):
         if pk is not None:
@@ -219,9 +221,7 @@ class FetchTransactionAccountsMixin(LedgerEntryPreparator):
         super().prepare()
         self._by_id = dict()
         self._by_lookup_str = dict()
-        lookup_builders = [
-           tpib_class(self) for tpib_class in self.lookup_builder_classes
-        ]
+        lookup_builders = self.get_lookup_builders()
         for info in self.transactions:
             appended = False
             for builder in lookup_builders:
@@ -229,9 +229,12 @@ class FetchTransactionAccountsMixin(LedgerEntryPreparator):
                 if appended:
                     break
             if not appended:
-                self.unparseable_account_message(
+                self.unparseable_account(
                     info.account_lookup_str, info.line_no
                 )
+
+        for builder in lookup_builders:
+            builder.populate_indexes()
 
         # It's technically more efficient to keep the transaction dicts around
         # to refer to later, but since later calls to validate_global might
@@ -512,8 +515,6 @@ def refund_overpayment(
 
 
 class CreditApportionmentMixin(LedgerEntryPreparator):
-    split_model = None
-
     overpayment_fmt_string = _(
         'Received %(total_credit)s, but only %(total_used)s '
         'can be applied to outstanding debts. '
@@ -525,6 +526,10 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
     payment_fk_name = None
     debt_fk_name = None
     _trans_buckets = None
+
+    @property
+    def split_model(self) -> Type[ST]:
+        return cast(Type[ST], self.model.get_split_model()[0])
 
     def debts_for(self, debt_key):
         raise NotImplementedError
@@ -607,6 +612,13 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
 class StandardCreditApportionmentMixin(CreditApportionmentMixin,
                                        FetchTransactionAccountsMixin):
 
+    @property
+    def model(self):
+        return self.transaction_party_model.get_payment_model()
+
+    def get_lookup_builders(self):
+        raise NotImplementedError
+
     def transaction_buckets(self):
         trans_buckets = defaultdict(list)
         # TODO: get the column name directly, because this isn't 100% reliable,
@@ -643,7 +655,8 @@ class StandardCreditApportionmentMixin(CreditApportionmentMixin,
             return None
         try:
             account = self._by_lookup_str[transaction.account_lookup_str]
-            kwargs[self.transaction_party_model.get_payment_remote_fk()] = account
+            acct_field = self.transaction_party_model.get_payment_remote_fk()
+            kwargs[acct_field] = account
             return kwargs
         except KeyError:
             # member search errors have already been logged

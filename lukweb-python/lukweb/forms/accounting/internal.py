@@ -335,9 +335,6 @@ class ByUIDIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
 
 class FetchMembersMixin(bulk_utils.FetchTransactionAccountsMixin):
     transaction_account_model = models.ChoirMember
-    lookup_builder_classes = [
-        ByUIDIndexBuilder, ByEmailIndexBuilder, ByNameIndexBuilder
-    ]
 
     unknown_account_message = _(
         '%(party)s does not designate a registered member.'
@@ -347,6 +344,13 @@ class FetchMembersMixin(bulk_utils.FetchTransactionAccountsMixin):
         '%(party)s designates multiple registered members. '
         'Skipped processing.',
     )
+
+    def get_lookup_builders(self):
+        return [
+            ByUIDIndexBuilder(self),
+            ByEmailIndexBuilder(self),
+            ByNameIndexBuilder(self)
+        ]
 
     # TODO: In the long term I would like to get rid of these eph
     # forms as well. That should be a bit easier to plan with the
@@ -364,7 +368,7 @@ class FetchMembersMixin(bulk_utils.FetchTransactionAccountsMixin):
         if kwargs is None:
             return None
         try:
-            member = self._by_lookup_str[transaction.payment_lookup_str]
+            member = self._by_lookup_str[transaction.account_lookup_str]
             kwargs['member'] = member
             return kwargs
         except KeyError:
