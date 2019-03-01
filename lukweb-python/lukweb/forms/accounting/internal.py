@@ -337,11 +337,11 @@ class FetchMembersMixin(bulk_utils.FetchTransactionAccountsMixin):
     transaction_account_model = models.ChoirMember
 
     unknown_account_message = _(
-        '%(party)s does not designate a registered member.'
+        '%(account)s does not designate a registered member.'
     )
 
     ambiguous_account_message = _(
-        '%(party)s designates multiple registered members. '
+        '%(account)s designates multiple registered members. '
         'Skipped processing.',
     )
 
