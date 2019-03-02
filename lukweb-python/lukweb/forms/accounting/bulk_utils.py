@@ -19,7 +19,7 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
-from lukweb.models.accounting.base import (
+from ...models.accounting.base import (
     TransactionPartyMixin, BaseDebtPaymentSplit
 )
 from ... import models
@@ -297,8 +297,10 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
 
     def dup_error_params(self, signature_used):
         return {
-            'date': signature_used[0],
-            'amount': Money(signature_used[1], settings.BOOKKEEPING_CURRENCY),
+            'date': signature_used.date,
+            'amount': Money(
+                signature_used.amount, settings.BOOKKEEPING_CURRENCY
+            ),
         }
 
 
@@ -621,18 +623,13 @@ class StandardCreditApportionmentMixin(CreditApportionmentMixin,
 
     def transaction_buckets(self):
         trans_buckets = defaultdict(list)
-        # TODO: get the column name directly, because this isn't 100% reliable,
-        #  though it will do for now.
-        payment_fk_name = '%s_id' % (
-            self.transaction_party_model.get_payment_remote_fk()
-        )
-        debt_fk_name = '%s_id' % (
-            self.transaction_party_model.get_debt_remote_fk()
-        )
+        tpm = self.transaction_party_model
+        payment_fk_name = tpm.get_payment_remote_fk_column()
+        debt_fk_name = tpm.get_debt_remote_fk_column()
         for t in self.valid_transactions:
             account_id = getattr(t.ledger_entry, payment_fk_name)
             trans_buckets[account_id].append(t)
-        base_qs = self.transaction_party_model.get_debt_model()._default_manager
+        base_qs = tpm.get_debt_model()._default_manager
 
         debt_qs = base_qs.filter(**{
             '%s__in' % debt_fk_name: self.account_ids()

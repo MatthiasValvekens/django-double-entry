@@ -1,7 +1,7 @@
 import logging
 import datetime
 from decimal import Decimal
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from typing import Type, Tuple, cast
 
 from django.db import models
@@ -23,7 +23,7 @@ from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
 from djmoney.money import Money
 
-from lukweb.models.utils import make_token
+from ...models.utils import make_token
 from ...payments import decimal_to_money, ogm_from_prefix, parse_ogm
 from ...utils import _dt_fallback, validated_bulk_query
 
@@ -300,13 +300,14 @@ class DoubleBookModel(DoubleBookInterface):
     class Meta:
         abstract = True
 
-
 class DuplicationProtectionMixin(DoubleBookInterface):
     """
     Specify fields to be used in the duplicate checker on bulk imports.
     The fields `timestamp` and `total_amount` are implicit.
     """
     dupcheck_signature_fields = None
+    __dupcheck_signature_nt = None
+    __dupcheck_sig_fields = None
 
     class Meta:
         abstract = True
@@ -316,21 +317,30 @@ class DuplicationProtectionMixin(DoubleBookInterface):
         cls = self.__class__
         if cls.dupcheck_signature_fields is None:
             return None
-        # translates foreign keys to the fieldname_id format,
-        # which is better for comparisons
-        sig_fields = list(
-            cls._meta.get_field(fname).column
-            for fname in cls.dupcheck_signature_fields
-        )
+
+        if cls.__dupcheck_signature_nt is None:
+            # translates foreign keys to the fieldname_id format,
+            # which is better for comparisons
+            sig_fields = list(
+                cls._meta.get_field(fname).column
+                for fname in cls.dupcheck_signature_fields
+            )
+            cls.__dupcheck_signature_nt = namedtuple(
+                self.__class__.__name__ + 'DuplicationSignature',
+                ['date', 'amount'] + sig_fields
+            )
+            cls.__dupcheck_sig_fields = sig_fields
+
+        sig_kwargs = {
+            field: getattr(self, field) for field in cls.__dupcheck_sig_fields
+        }
         # Problem: the resolution of most banks' reporting is a day.
         # Hence, we cannot use an exact timestamp as a cutoff point between
-        # imports, which would eliminate the need for duplicate 
+        # imports, which would eliminate the need for duplicate
         # checking in practice.
-        date = timezone.localdate(self.timestamp)
-        amt = self.total_amount.amount
-        return (date, amt) + tuple(
-            getattr(self, field) for field in sig_fields
-        )
+        sig_kwargs['date'] = timezone.localdate(self.timestamp)
+        sig_kwargs['amount'] = self.total_amount.amount
+        return cls.__dupcheck_signature_nt(**sig_kwargs)
 
 
 class ConcreteAmountMixin(models.Model):
@@ -823,6 +833,8 @@ class TransactionPartyMixin(models.Model):
     _split_model: Type[BaseDebtPaymentSplit] = None
     _debt_remote_fk: str = None
     _payment_remote_fk: str = None
+    _debt_remote_fk_column: str = None
+    _payment_remote_fk_column: str = None
 
     hidden_token = models.BinaryField(
         max_length=8,
@@ -855,6 +867,8 @@ class TransactionPartyMixin(models.Model):
             )
         cls._debt_remote_fk = debts_f.remote_field.name
         cls._payment_remote_fk = payments_f.remote_field.name
+        cls._debt_remote_fk_column = debts_f.remote_field.column
+        cls._payment_remote_fk_column = debts_f.remote_field.column
         models_consistent = (
             cls._debt_model.get_other_half_model() == cls._payment_model
             and cls._payment_model.get_other_half_model() == cls._debt_model
@@ -889,6 +903,16 @@ class TransactionPartyMixin(models.Model):
     def get_payment_remote_fk(cls):
         cls._annotate_model_metadata()
         return cls._payment_remote_fk
+
+    @classmethod
+    def get_debt_remote_fk_column(cls):
+        cls._annotate_model_metadata()
+        return cls._debt_remote_fk_column
+
+    @classmethod
+    def get_payment_remote_fk_column(cls):
+        cls._annotate_model_metadata()
+        return cls._payment_remote_fk_column
 
     @classmethod
     def parse_transaction_no(cls, ogm):

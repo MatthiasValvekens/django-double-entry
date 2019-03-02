@@ -560,8 +560,8 @@ class MiscDebtPaymentPreparator(FetchMembersMixin,
         params = super().dup_error_params(signature_used)
         # get human-readable value
         nature_choices = dict(models.InternalPayment.PAYMENT_NATURE_CHOICES)
-        params['nature'] = nature_choices[signature_used[2]]
-        params['member'] = str(self.get_account(pk=signature_used[3]))
+        params['nature'] = nature_choices[signature_used.nature]
+        params['member'] = str(self.get_account(pk=signature_used.member_id))
         return params
 
     def form_kwargs_for_transaction(self, transaction):

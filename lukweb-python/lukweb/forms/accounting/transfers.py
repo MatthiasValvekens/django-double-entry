@@ -7,7 +7,7 @@ from django.utils.translation import (
     ugettext_lazy as _, ugettext,
 )
 
-from lukweb.models.accounting.base import TransactionPartyMixin
+from ...models.accounting.base import TransactionPartyMixin
 from . import internal, bulk_utils
 from ... import payments, models
 
@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 __all__ = ['BulkTransferUploadForm']
 
 
-# TODO: implement parser switching in globals
 # TODO: case-insensitive column names
 # TODO: clearly document parsers
 # TODO: delimiter autodetection
@@ -139,10 +138,8 @@ class DebtTransferPaymentPreparator(TransferPaymentPreparator):
     transaction_party_model = models.ChoirMember
 
     def dup_error_params(self, signature_used):
-        # TODO: don't use magic numbers that depend on the order of
-        # dupcheck_signature_fields on the model
         params = super().dup_error_params(signature_used)
-        params['account'] = str(self._by_id[signature_used[3]])
+        params['account'] = str(self.get_account(pk=signature_used.member_id))
         return params
 
     def model_kwargs_for_transaction(self, transaction):
