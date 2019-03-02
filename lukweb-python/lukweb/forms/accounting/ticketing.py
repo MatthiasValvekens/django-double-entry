@@ -6,9 +6,8 @@ from typing import Generator, Tuple, Iterable
 from django import forms
 from django.forms.models import ModelForm, modelformset_factory
 
-from lukweb.forms.accounting.bulk_utils import ApportionmentResult
-from lukweb.models.accounting import base as accounting_base
-from lukweb.models.accounting.base import BaseDebtPaymentSplit
+from ...models.accounting import base as accounting_base
+from ...models.accounting.base import BaseDebtPaymentSplit
 
 from . import bulk_utils
 from ... import models
@@ -22,9 +21,9 @@ __all__ = [
 
 class ReservationPaymentForm(ModelForm):
     customer_id = forms.IntegerField()
-    event_name = forms.CharField(required=False)
     name = forms.CharField(required=False)
     email = forms.EmailField(required=False)
+    ogm = forms.CharField(max_length=21, required=False)
 
     class Meta:
         model = models.ReservationPayment
@@ -54,7 +53,7 @@ class BaseReservationPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
         return payments_by_customer.keys(), all_payments
 
     def generate_splits(self, party) -> Generator[
-        BaseDebtPaymentSplit, None, ApportionmentResult
+        BaseDebtPaymentSplit, None, bulk_utils.ApportionmentResult
     ]:
         relevant_payments = self._payments_by_customer[party.pk]
         return bulk_utils.make_payment_splits(

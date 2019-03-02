@@ -8,7 +8,7 @@ from django.utils.translation import (
 )
 
 from ...models.accounting.base import TransactionPartyMixin
-from . import internal, bulk_utils
+from . import internal, bulk_utils, ticketing
 from ... import payments, models
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,11 @@ class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin,
         else:
             return super().refund_message
 
+    def form_kwargs_for_transaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        kwargs['ogm'] = transaction.account_lookup_str
+        return kwargs
+
 class DebtTransferPaymentPreparator(TransferPaymentPreparator):
 
     formset_class = internal.BulkPaymentFormSet
@@ -152,7 +157,6 @@ class DebtTransferPaymentPreparator(TransferPaymentPreparator):
     def form_kwargs_for_transaction(self, transaction):
         kwargs = super().form_kwargs_for_transaction(transaction)
         member = transaction.ledger_entry.member
-        kwargs['ogm'] = transaction.account_lookup_str
         kwargs['member_id'] = member.pk
         kwargs['name'] = member.full_name
         kwargs['email'] = member.user.email
@@ -162,9 +166,45 @@ class DebtTransferPaymentPreparator(TransferPaymentPreparator):
     def debts_for(self, debt_key):
         return self._debt_buckets[debt_key]
 
+# TODO: give feedback about which tickets are going to be issued, and which
+#  payments are still incomplete
+class ReservationTransferPaymentPreparator(TransferPaymentPreparator):
+
+    formset_class = ticketing.ReservationPaymentFormSet
+    formset_prefix = 'reservation-payment-transfers'
+    prefix_digit = payments.OGM_RESERVATION_PREFIX
+    transaction_party_model = models.Customer
+
+    def dup_error_params(self, signature_used):
+        params = super().dup_error_params(signature_used)
+        params['account'] = str(
+            self.get_account(pk=signature_used.customer_id)
+        )
+        return params
+
+    def model_kwargs_for_transaction(self, transaction):
+        kwargs = super().model_kwargs_for_transaction(transaction)
+        if kwargs is None:
+            return None
+        kwargs['method'] = models.PAYMENT_METHOD_PREPAID
+        return kwargs
+
+    def form_kwargs_for_transaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        customer = transaction.ledger_entry.customer
+        kwargs['customer_id'] = customer.pk
+        kwargs['name'] = customer.name
+        kwargs['email'] = customer.email
+        kwargs['method'] = models.PAYMENT_METHOD_PREPAID
+        return kwargs
+
+    def debts_for(self, debt_key):
+        return self._debt_buckets[debt_key]
 
 class BulkTransferUploadForm(bulk_utils.FinancialCSVUploadForm):
-    ledger_preparator_classes = (DebtTransferPaymentPreparator,)
+    ledger_preparator_classes = (
+        DebtTransferPaymentPreparator, ReservationTransferPaymentPreparator
+    )
     upload_field_label = _('Electronic transfers (.csv)')
 
     @property
@@ -174,12 +214,13 @@ class BulkTransferUploadForm(bulk_utils.FinancialCSVUploadForm):
 
     def render_confirmation_page(self, request, context=None):
         context = context or {}
-        # TODO: reservation stuff will wind up here
-        internaldebt, = self.formset_preparators
+        internaldebt, reservations = self.formset_preparators
         context.update({
             'disable_margins': True,
             'internaldebt_proc_errors': internaldebt.errors,
             'internaldebt_formset': internaldebt.formset,
+            'reservation_proc_errors': reservations.errors,
+            'reservation_formset': reservations.formset,
         })
 
         return render(

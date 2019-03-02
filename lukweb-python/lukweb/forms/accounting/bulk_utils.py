@@ -5,6 +5,7 @@ from typing import (
     TypeVar, Sequence, Generator, Type, Tuple,
     Iterator, Optional, Iterable,
     cast,
+    List,
 )
 
 from django import forms
@@ -673,11 +674,9 @@ class FinancialCSVUploadForm(CSVUploadForm):
         self.fields['csv'].label = self.upload_field_label
     
     @cached_property
-    def formset_preparators(self):
+    def formset_preparators(self) -> List[LedgerEntryPreparator]:
         data = self.cleaned_data['csv']
-        return tuple(
-            prep(data) for prep in self.ledger_preparator_classes
-        )
+        return [prep(data) for prep in self.ledger_preparator_classes]
 
     # is the most common use case
     @property
