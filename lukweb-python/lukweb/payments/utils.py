@@ -2,6 +2,7 @@ import re
 from collections import defaultdict
 from decimal import Decimal
 
+from django.http import HttpResponse
 from django.conf import settings
 from django.forms import ValidationError
 from django.utils import timezone
@@ -10,8 +11,12 @@ from django.utils.translation import (
     pgettext,
 )
 from djmoney.money import Money
+from moneyed import EUR
 
 from ..utils import _dt_fallback
+
+import logging
+logger = logging.getLogger(__name__)
 
 __all__ = [
     'PAYMENT_NATURE_CASH', 'PAYMENT_NATURE_OTHER', 'PAYMENT_NATURE_TRANSFER',
@@ -19,6 +24,7 @@ __all__ = [
     'generate_qif', 'VALID_OGM_PREFIXES', 'OGM_REGEX', 'decimal_to_money',
     'parse_ogm', 'valid_ogm',
     'ogm_from_prefix', 'check_payment_change_permissions', 'any_payment_access',
+    'epc_qr_code_response'
 ]
 
 PAYMENT_NATURE_CASH = 1
@@ -237,3 +243,56 @@ def generate_qif(start, end, by_processed_ts=True):
     result = '\n'.join(format_qif())
     activate(old_lang)
     return result
+
+
+def epc_qr_code_response(*, transaction_amount: Money,
+                         remittance_info, sepa_purpose):
+    from ..models import FinancialGlobals
+
+    if len(sepa_purpose) != 4:
+        raise ValueError('SEPA AT-44 Purpose must consist of 4 characters.')
+    if transaction_amount.currency != EUR:
+        raise ValueError(
+            'Can only use EPC codes with amounts in EUR, not %s.',
+            transaction_amount.currency
+        )
+
+    fin_globals: FinancialGlobals = FinancialGlobals.load()
+    if not all([fin_globals.sepa_bic, fin_globals.sepa_beneficiary,
+               fin_globals.choir_iban]):
+        logger.warning(
+            'Financial globals incomplete -- could not dispatch EPC QR code.'
+        )
+        return HttpResponse('Improperly configured', status=503)
+    payload = (
+        'BCD\n' # service identifier
+        '001\n' # version number
+        '1\n'   # charset (1 = UTF-8)
+        'SCT\n' # ident code (SCT = SEPA Credit Transfer)
+        '%(bic)s\n'
+        '%(beneficiary)s\n'
+        '%(iban)s\n'
+        'EUR%(amount).2f\n'
+        '%(purpose)s\n'
+        '%(remittance_info)s\n'
+    ) % {
+        'bic': fin_globals.sepa_bic,
+        'beneficiary': fin_globals.sepa_beneficiary,
+        'iban': fin_globals.choir_iban.replace(' ', ''),
+        'amount': transaction_amount.amount,
+        'purpose': sepa_purpose,
+        'remittance_info': remittance_info
+    }
+
+    try:
+        import qrcode
+        import qrcode.image.svg
+
+        img = qrcode.make(
+            payload, image_factory=qrcode.image.svg.SvgImage
+        )
+        response = HttpResponse(content_type='image/svg+xml')
+        img.save(response)
+        return response
+    except ImportError:
+        return HttpResponse('QR code not available', status=503)

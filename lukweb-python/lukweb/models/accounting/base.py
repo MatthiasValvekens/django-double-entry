@@ -918,18 +918,25 @@ class TransactionPartyMixin(models.Model):
     def parse_transaction_no(cls, ogm):
         return parse_transaction_no(ogm, cls.PAYMENT_TRACKING_PREFIX)
 
-    @cached_property
-    def payment_tracking_no(self, formatted=True):
+    def _payment_tracking_no(self, formatted):
         # memoryview weirdness forces this
         token_seed = bytes(self.hidden_token)[1]
         raw = int('%07d%02d' % (
-                self.pk % 10 ** 7,
-                token_seed % 100,
-            )
+            self.pk % 10 ** 7,
+            token_seed % 100,
         )
+                  )
         obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
         prefix_str = '%s%09d' % (self.__class__.PAYMENT_TRACKING_PREFIX, obf)
         return ogm_from_prefix(prefix_str, formatted)
+
+    @cached_property
+    def payment_tracking_no(self):
+        return self._payment_tracking_no(True)
+
+    @cached_property
+    def raw_payment_tracking_no(self):
+        return self._payment_tracking_no(False)
 
     @cached_property
     def debt_balance(self):
