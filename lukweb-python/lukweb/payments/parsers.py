@@ -200,8 +200,26 @@ class DebtCSVParser(MemberTransactionParser):
         parsed = super().parse_row_to_dict(line_no, row)
         if parsed is None:
             return None
-        parsed['comment'] = row[self.comment_column_name]
-        parsed['gnucash'] = row[self.gnucash_column_name]
+        column_required_msg = _('You must supply a value for \'%(colname)s\'.')
+
+        parsed['comment'] = comment = row[self.comment_column_name]
+        if not comment:
+            self.error(
+                line_no, column_required_msg % {
+                    'colname': self.comment_column_name,
+                }
+            )
+            return None
+
+        parsed['gnucash'] = gnucash = row[self.gnucash_column_name]
+        if not gnucash:
+            self.error(
+                line_no, column_required_msg % {
+                    'colname': self.gnucash_column_name,
+                }
+            )
+            return None
+
         # coerce falsy values
         parsed['filter_slug'] = slugify(row.get('filter', '')) or None
         activity_id = row.get(self.activity_column_name, None)
