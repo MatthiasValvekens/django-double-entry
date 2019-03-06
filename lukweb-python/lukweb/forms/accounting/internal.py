@@ -287,6 +287,7 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                 nature=data['nature'],
                 member_id=member_id
             )
+            payment.spoof_matched_balance(Decimal('0.00'))
             payments_by_member[member_id][debt_filter].append(payment)
 
         member_qs = models.ChoirMember.objects.filter(
