@@ -45,6 +45,7 @@ class BaseReservationPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
                 timestamp=data['timestamp'],
                 customer_id=data['customer_id']
             )
+            payment.spoof_matched_balance(Decimal('0.00'))
             payments_by_customer[payment.customer_id].append(payment)
         all_payments = list(
             chain(*payments_by_customer.values())

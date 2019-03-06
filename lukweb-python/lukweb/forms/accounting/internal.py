@@ -464,6 +464,7 @@ class BaseBulkPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
                 nature=data['nature'],
                 member_id=member_id
             )
+            payment.spoof_matched_balance(Decimal('0.00'))
             payments_by_member[member_id][debt_filter].append(payment)
 
         self._payments_by_member = payments_by_member
