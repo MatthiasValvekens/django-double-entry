@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from decimal import Decimal
 from itertools import chain
 from typing import Generator, Tuple, Iterable
 
