@@ -7,7 +7,6 @@ from typing import Tuple, Iterable
 
 from django import forms
 from django.core.exceptions import SuspiciousOperation
-from django.db.models import Q
 from django.forms.models import ModelForm, modelformset_factory
 from django.shortcuts import render
 from django.utils.translation import (
@@ -699,16 +698,7 @@ class BulkPaymentUploadForm(bulk_utils.FinancialCSVUploadForm):
 
 
 class InternalPaymentSplitFormSet(InlineTransactionSplitFormSet):
-
-    def base_filter(self):
-        qs = Q(member=self.instance.member)
-        if isinstance(self.instance, models.InternalDebtItem):
-            qs &= Q(timestamp__gte=self.instance.timestamp)
-        elif isinstance(self.instance, models.InternalPayment):
-            qs &= Q(timestamp__lte=self.instance.timestamp)
-        else:
-            raise TypeError
-        return qs
+    transaction_party_model = models.ChoirMember
 
 
 def recompute_payment_splits(payments, debt_filter=None, **kwargs):

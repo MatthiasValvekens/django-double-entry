@@ -10,14 +10,15 @@ from django.forms.models import ModelForm, modelformset_factory
 from ...models.accounting import base as accounting_base
 from ...models.accounting.base import BaseDebtPaymentSplit
 
-from . import bulk_utils
+from . import bulk_utils, base
 from ... import models
 from ...tasks import dispatch_tickets
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    'ReservationPaymentForm', 'ReservationPaymentFormSet'
+    'ReservationPaymentForm', 'ReservationPaymentFormSet',
+    'ReservationPaymentSplitFormSet'
 ]
 
 class ReservationPaymentForm(ModelForm):
@@ -84,3 +85,7 @@ ReservationPaymentFormSet = modelformset_factory(
     formset=BaseReservationPaymentFormSet,
     extra=0
 )
+
+
+class ReservationPaymentSplitFormSet(base.InlineTransactionSplitFormSet):
+    transaction_party_model = models.Customer
