@@ -5,8 +5,12 @@ from itertools import chain
 from typing import Generator, Tuple, Iterable
 
 from django import forms
+from django.core.exceptions import NON_FIELD_ERRORS
 from django.forms.models import ModelForm, modelformset_factory
+from django.urls import reverse_lazy
+from django.utils.translation import ugettext_lazy as _
 
+from lukweb.widgets import AjaxDatalistInputWidget
 from ...models.accounting import base as accounting_base
 from ...models.accounting.base import BaseDebtPaymentSplit
 
@@ -18,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     'ReservationPaymentForm', 'ReservationPaymentFormSet',
-    'ReservationPaymentSplitFormSet'
+    'ReservationPaymentSplitFormSet', 'TicketInlineAdminForm',
+    'ReservationAdminForm'
 ]
 
 class ReservationPaymentForm(ModelForm):
@@ -89,3 +94,28 @@ ReservationPaymentFormSet = modelformset_factory(
 
 class ReservationPaymentSplitFormSet(base.InlineTransactionSplitFormSet):
     transaction_party_model = models.Customer
+
+
+class TicketInlineAdminForm(ModelForm):
+    class Meta:
+        model = models.Ticket
+        fields = '__all__'
+        error_messages = {
+            NON_FIELD_ERRORS: {
+                'unique_together': _(
+                    'Ticket category used multiple times on the '
+                    'same reservation.'
+                ),
+            }
+        }
+
+
+class ReservationAdminForm(ModelForm):
+    class Meta:
+        model = models.Reservation
+        fields = tuple()
+        widgets = {
+            'referrer': AjaxDatalistInputWidget(
+                endpoint=reverse_lazy('member_autocomplete')
+            )
+        }
