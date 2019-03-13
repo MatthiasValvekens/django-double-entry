@@ -164,7 +164,7 @@ class DoubleBookInterface(models.Model):
         
         # the is_candidate condition guarantees that this works
         split_fk_1, split_fk_2 = get_fks_on_split(cls._split_model)
-        if split_fk_1.related_model == cls:
+        if issubclass(cls, split_fk_1.related_model):
             cls._other_half_model = split_fk_2.related_model
         else:
             cls._other_half_model = split_fk_1.related_model
