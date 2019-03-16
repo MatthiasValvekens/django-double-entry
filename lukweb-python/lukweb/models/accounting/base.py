@@ -868,7 +868,7 @@ class TransactionPartyMixin(models.Model):
         cls._debt_remote_fk = debts_f.remote_field.name
         cls._payment_remote_fk = payments_f.remote_field.name
         cls._debt_remote_fk_column = debts_f.remote_field.column
-        cls._payment_remote_fk_column = debts_f.remote_field.column
+        cls._payment_remote_fk_column = payments_f.remote_field.column
         models_consistent = (
             cls._debt_model.get_other_half_model() == cls._payment_model
             and cls._payment_model.get_other_half_model() == cls._debt_model
