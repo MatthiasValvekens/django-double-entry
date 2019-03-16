@@ -286,7 +286,7 @@ class ByUIDIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
         uid = int(uid_str)
         if token is not None:
             self.transaction_index[uid].append(
-                tinfo, (token, match.group('salt'))
+                (tinfo, (token, match.group('salt')))
             )
         else:
             self.transaction_index[uid].append((tinfo, None))
