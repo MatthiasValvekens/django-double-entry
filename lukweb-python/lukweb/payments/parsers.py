@@ -1,7 +1,6 @@
 import datetime
 import re
 from _pydecimal import Decimal, DecimalException
-from csv import DictReader
 
 from django.conf import settings
 from django.utils import timezone
@@ -14,7 +13,7 @@ from .utils import (
     PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER, OGM_REGEX,
     parse_ogm, ogm_from_prefix
 )
-from ..utils import _dt_fallback
+from ..utils import _dt_fallback, CIDictReader
 
 __all__ = [
     'FinancialCSVParser', 'PaymentCSVParser', 'KBCCSVParser', 'FortisCSVParser',
@@ -87,7 +86,7 @@ class FinancialCSVParser:
             self._file_read = True
             return
 
-        csv = DictReader(self.csv_file, delimiter=self.delimiter)
+        csv = CIDictReader(self.csv_file, delimiter=self.delimiter)
 
         def gen():
             for line_no, row in enumerate(csv):
@@ -344,6 +343,8 @@ class FortisCSVParser(BankCSVParser):
 class KBCCSVParser(BankCSVParser):
     # The inconsistent capitalisation in column names
     # is *not* a typo on my part.
+    # (although it shouldn't be necessary any longer given the fact that
+    # csv headers are now parsed case-insensitively)
     delimiter = ';'
     verbose_name = _('KBC .csv parser')
 
@@ -354,7 +355,6 @@ class KBCCSVParser(BankCSVParser):
     def get_ogm(self, line_no, row):
         ogm_str = row['gestructureerde mededeling'].strip()
         if not ogm_str:
-            # Always assume that there will be simpletons who don't know the
             # this is a fallback option, so we don't require this column
             # to be present
             ogm_str = row.get('Vrije mededeling', '').strip()
