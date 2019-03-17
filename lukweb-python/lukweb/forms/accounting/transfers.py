@@ -51,10 +51,12 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
             self.transaction_index[string].append(tinfo)
             return True
 
+    def base_query_set(self):
+        return self.ledger_preparator.transaction_party_model \
+            ._default_manager.with_debts_and_payments()
+
     def execute_query(self) -> Iterable[TransactionPartyMixin]:
-        account_qs, unseen = self.ledger_preparator.transaction_party_model \
-            ._default_manager.with_debt_balances().select_related('user') \
-            .by_payment_tracking_nos(
+        account_qs, unseen = self.base_query_set().by_payment_tracking_nos(
             self.transaction_index.keys(), validate_unseen=True
         )
 
@@ -97,9 +99,11 @@ class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin,
         'Resolution: likely duplicate, skipped processing.'
     )
 
+    # unreadable payment references should be skipped silently
+    unparseable_account_message = None
+
     @property
     def overpayment_fmt_string(self):
-
         return ' '.join(
             (
                 ugettext(
@@ -135,12 +139,25 @@ class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin,
         kwargs['ogm'] = transaction.account_lookup_str
         return kwargs
 
+
+class InternalDebtTransferIndexBuilder(TransferTransactionIndexBuilder):
+    def base_query_set(self):
+        return super().base_query_set().select_related('user')
+
+
 class DebtTransferPaymentPreparator(TransferPaymentPreparator):
 
     formset_class = internal.BulkPaymentFormSet
     formset_prefix = 'bulk-debt-transfers'
     prefix_digit = payments.OGM_INTERNAL_DEBT_PREFIX
     transaction_party_model = models.ChoirMember
+
+    def get_lookup_builders(self):
+        return [
+            InternalDebtTransferIndexBuilder(
+                self, prefix_digit=self.prefix_digit
+            )
+        ]
 
     def dup_error_params(self, signature_used):
         params = super().dup_error_params(signature_used)

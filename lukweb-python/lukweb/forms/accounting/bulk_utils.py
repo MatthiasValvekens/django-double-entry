@@ -213,10 +213,11 @@ class FetchTransactionAccountsMixin(LedgerEntryPreparator):
         )
 
     def unparseable_account(self, account_lookup_str, line_no):
-        self.error_at_line(
-            line_no, self.unparseable_account_message,
-            params={'account': account_lookup_str}
-        )
+        if self.unparseable_account_message is not None:
+            self.error_at_line(
+                line_no, self.unparseable_account_message,
+                params={'account': account_lookup_str}
+            )
 
     def prepare(self):
         super().prepare()

@@ -66,19 +66,19 @@ class BaseReservationPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
         relevant_payments = self._payments_by_customer[party.pk]
         return bulk_utils.make_payment_splits(
             payments=sorted(relevant_payments, key=lambda p: p.timestamp),
-            debts=party.debts.unpaid().order_by('timestamp'),
+            debts=party.reservations.unpaid().order_by('timestamp'),
             split_model=self.transaction_party_model.get_split_model()
         )
 
     def post_debt_update(self, fully_paid_debts, remaining_debts):
-        reservation_ids = models.Reservation.objects.filter(
-            debt__in=fully_paid_debts
-        ).values_list('pk', flat=True)
-        dispatch_tickets.delay(reservation_ids)
-        logger.info(
-            'Queued ticket issuance for '
-            'reservation ids %s.' % reservation_ids
-        )
+        # the ORM uses the same pk for reservations and reservation debts
+        reservation_ids = [d.pk for d in fully_paid_debts]
+        if reservation_ids:
+            dispatch_tickets.delay(reservation_ids)
+            logger.info(
+                'Queued ticket issuance for '
+                'reservation ids %s.' % reservation_ids
+            )
         # TODO: do we want to automatically email people that didn't pay off
         #  all relevant debts?
         return reservation_ids

@@ -439,7 +439,7 @@ class InternalDebtRecordPreparator(FetchMembersMixin):
 # This class can process both electronic transfers and
 # cash payments
 class BaseBulkPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
-    transaction_account_model = models.ChoirMember
+    transaction_party_model = models.ChoirMember
 
     def prepare_payment_instances(self) -> Tuple[
         Iterable[int], Iterable[accounting_base.BasePaymentRecord]
