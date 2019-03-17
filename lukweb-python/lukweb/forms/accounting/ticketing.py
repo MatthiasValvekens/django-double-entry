@@ -1,93 +1,121 @@
 import logging
+from collections import defaultdict
+from decimal import Decimal
+from itertools import chain
+from typing import Generator, Tuple, Iterable
 
 from django import forms
-from django.db import transaction
+from django.core.exceptions import NON_FIELD_ERRORS
 from django.forms.models import ModelForm, modelformset_factory
-from djmoney.forms import MoneyField
+from django.urls import reverse_lazy
+from django.utils.translation import ugettext_lazy as _
 
+from lukweb.widgets import AjaxDatalistInputWidget
+from ...models.accounting import base as accounting_base
+from ...models.accounting.base import BaseDebtPaymentSplit
+
+from . import bulk_utils, base
 from ... import models
 from ...tasks import dispatch_tickets
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    'ReservationPaymentForm', 'ReservationPaymentFormSet'
+    'ReservationPaymentForm', 'ReservationPaymentFormSet',
+    'ReservationPaymentSplitFormSet', 'TicketInlineAdminForm',
+    'ReservationAdminForm'
 ]
 
-
-class TicketForm(ModelForm): 
-
-    class Meta:
-        model = models.Ticket
-        fields = ('amount',)
-
-    def save(self, commit=True):
-        instance = super(TicketForm, self).save(commit=False)
-        instance.reservation = self._reservation
-        instance.category = self.category
-        if instance.amount == 0:
-            return instance
-        if commit:
-            instance.save()
-        return instance
-
-
 class ReservationPaymentForm(ModelForm):
-    # mostly UI data again
-    total_amount = MoneyField()
-    event_name = forms.CharField()
-    
+    customer_id = forms.IntegerField()
+    name = forms.CharField(required=False)
+    email = forms.EmailField(required=False)
+    ogm = forms.CharField(max_length=21, required=False)
+
     class Meta:
-        model = models.Reservation
-        fields = (
-            'name', 'email', 'payment_timestamp'
-        )
+        model = models.ReservationPayment
+        fields = ('method', 'total_amount', 'timestamp', 'customer_id')
 
-    def __init__(self, *args, instance=None, **kwargs):
-        if instance:
-            initial = kwargs.get('initial', {})
-            initial['total_amount'] = instance.total_price
-            initial['event_name'] = instance.event.name
-            kwargs['initial'] = initial
-        super(ReservationPaymentForm, self).__init__(
-            *args, instance=instance, **kwargs
-        )
+class BaseReservationPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
+    transaction_party_model = models.Customer
 
-
-class BaseReservationPaymentFormSet(forms.BaseModelFormSet):
-    def save(self, commit=True):
-        reservation_data = {
-            form.cleaned_data['reservation_id']:
-                form.cleaned_data['payment_timestamp']
-            for form in self.forms
-        }
-        reservation_ids = reservation_data.keys()
-        if not reservation_ids:
-            return []
-        elif not commit:  # never called, but let's deal with it anyway
-            return reservation_ids
-
-        # first update payment records
-        with transaction.atomic():
-            queryset = models.Reservation.objects.filter(
-                pk__in=reservation_ids,
-                payment_timestamp=None
+    def prepare_payment_instances(self) -> Tuple[
+        Iterable[int], Iterable[accounting_base.BasePaymentRecord]
+    ]:
+        payments_by_customer = defaultdict(list)
+        for form in self.extra_forms:
+            # form.instance ignores the customer_id field
+            data = form.cleaned_data
+            payment = models.ReservationPayment(
+                method=data['method'],
+                total_amount=data['total_amount'],
+                timestamp=data['timestamp'],
+                customer_id=data['customer_id']
             )
-            for r in queryset:
-                r.payment_timestamp = reservation_data[r.pk]
-                r.save()
-
-        dispatch_tickets.delay(reservation_ids)
-        logger.info(
-            'Queued ticket issuance for '
-            'reservation ids %s.' % reservation_ids
+            payment.spoof_matched_balance(Decimal('0.00'))
+            payments_by_customer[payment.customer_id].append(payment)
+        all_payments = list(
+            chain(*payments_by_customer.values())
         )
+        self._payments_by_customer = payments_by_customer
+        return payments_by_customer.keys(), all_payments
+
+    def generate_splits(self, party) -> Generator[
+        BaseDebtPaymentSplit, None, bulk_utils.ApportionmentResult
+    ]:
+        relevant_payments = self._payments_by_customer[party.pk]
+        return bulk_utils.make_payment_splits(
+            payments=sorted(relevant_payments, key=lambda p: p.timestamp),
+            debts=party.reservations.unpaid().order_by('timestamp'),
+            split_model=self.transaction_party_model.get_split_model()
+        )
+
+    def post_debt_update(self, fully_paid_debts, remaining_debts):
+        # the ORM uses the same pk for reservations and reservation debts
+        reservation_ids = [d.pk for d in fully_paid_debts]
+        if reservation_ids:
+            dispatch_tickets.delay(reservation_ids)
+            logger.info(
+                'Queued ticket issuance for '
+                'reservation ids %s.' % reservation_ids
+            )
+        # TODO: do we want to automatically email people that didn't pay off
+        #  all relevant debts?
         return reservation_ids
 
 
 ReservationPaymentFormSet = modelformset_factory(
-    model=models.Reservation,
+    model=models.ReservationPayment,
     form=ReservationPaymentForm,
     formset=BaseReservationPaymentFormSet,
     extra=0
 )
+
+
+class ReservationPaymentSplitFormSet(base.InlineTransactionSplitFormSet):
+    transaction_party_model = models.Customer
+
+
+class TicketInlineAdminForm(ModelForm):
+    class Meta:
+        model = models.Ticket
+        fields = '__all__'
+        error_messages = {
+            NON_FIELD_ERRORS: {
+                'unique_together': _(
+                    'Ticket category used multiple times on the '
+                    'same reservation.'
+                ),
+            }
+        }
+
+
+class ReservationAdminForm(ModelForm):
+    class Meta:
+        model = models.Reservation
+        fields = tuple()
+        widgets = {
+            'referrer': AjaxDatalistInputWidget(
+                endpoint=reverse_lazy('member_autocomplete')
+            )
+        }

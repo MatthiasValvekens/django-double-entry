@@ -1,7 +1,7 @@
 import logging
 import datetime
 from decimal import Decimal
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from typing import Type, Tuple, cast
 
 from django.db import models
@@ -9,6 +9,7 @@ from django.db.models import (
     F, Sum, Case, When, Subquery, OuterRef,
     Value, ExpressionWrapper,
     Max,
+    Prefetch,
 )
 from django.db.models.functions import Coalesce
 from django.forms import ValidationError
@@ -20,17 +21,55 @@ from django.utils.translation import (
 from djmoney.models.fields import MoneyField
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
+from djmoney.money import Money
 
-from ...payments import decimal_to_money
-from ...utils import _dt_fallback
+from ...models.utils import make_token
+from ...payments import decimal_to_money, ogm_from_prefix, parse_ogm
+from ...utils import _dt_fallback, validated_bulk_query
 
 __all__ = [
-    'DoubleBookModel', 'BaseFinancialRecord', 'BaseDebtRecord',
+    'DoubleBookModel', 'ConcreteAmountMixin', 'BaseDebtRecord',
     'BasePaymentRecord', 'BaseDebtQuerySet', 'BasePaymentQuerySet',
-    'BaseTransactionSplit', 'DoubleBookQuerySet', 'nonzero_money_validator'
+    'BaseTransactionSplit', 'DoubleBookQuerySet', 'nonzero_money_validator',
+    'GnuCashCategory'
 ]
 
 logger = logging.getLogger(__name__)
+
+
+class GnuCashCategory(models.Model):
+    # TODO: can we branch on whether citext is available or not?
+    # TODO: what kind of validation do we want here?
+    name = models.CharField(
+        max_length=255,
+        verbose_name=_('GnuCash category name'),
+        unique=True,
+    )
+
+    class Meta:
+        verbose_name = _('GnuCash category')
+        verbose_name_plural = _('GnuCash categories')
+        ordering = ('name',)
+
+    @classmethod
+    def get_category(cls, name, create=True):
+        if not name:
+            return None
+        if create:
+            obj, created = cls.objects.get_or_create(
+                name__iexact=name,
+                # need to set defaults when using __iexact
+                defaults={'name': name}
+            )
+        else:
+            try:
+                obj = cls.objects.get(name__iexact=name)
+            except cls.DoesNotExist:
+                obj = cls(name=name)
+        return obj
+
+    def __str__(self):
+        return self.name
 
 
 def nonzero_money_validator(money):
@@ -51,7 +90,6 @@ class DoubleBookInterface(models.Model):
     Name of the field or property representing the total amount.
     Possibly different from the actual db column / annotation.
     """
-    TOTAL_AMOUNT_FIELD_NAME = 'total_amount'
     TOTAL_AMOUNT_FIELD_COLUMN = 'total_amount'
 
     # This error message is vague, so subclasses should override it with
@@ -67,8 +105,9 @@ class DoubleBookInterface(models.Model):
     _remote_target_field = None
     _other_half_model = None
 
-    timestamp = None
-    processed = None
+    timestamp: datetime
+    processed: datetime
+    total_amount: Money
 
     class Meta:
         abstract = True
@@ -125,7 +164,7 @@ class DoubleBookInterface(models.Model):
         
         # the is_candidate condition guarantees that this works
         split_fk_1, split_fk_2 = get_fks_on_split(cls._split_model)
-        if split_fk_1.related_model == cls:
+        if issubclass(cls, split_fk_1.related_model):
             cls._other_half_model = split_fk_2.related_model
         else:
             cls._other_half_model = split_fk_1.related_model
@@ -220,8 +259,7 @@ class DoubleBookInterface(models.Model):
                 getattr(self, DoubleBookQuerySet.UNMATCHED_BALANCE_FIELD)
             )
         except AttributeError:
-            total_amount = getattr(self, self.TOTAL_AMOUNT_FIELD_NAME)
-            return  total_amount - self.matched_balance
+            return  self.total_amount - self.matched_balance
 
     @property
     def fully_matched(self):
@@ -262,13 +300,14 @@ class DoubleBookModel(DoubleBookInterface):
     class Meta:
         abstract = True
 
-
 class DuplicationProtectionMixin(DoubleBookInterface):
     """
     Specify fields to be used in the duplicate checker on bulk imports.
     The fields `timestamp` and `total_amount` are implicit.
     """
     dupcheck_signature_fields = None
+    __dupcheck_signature_nt = None
+    __dupcheck_sig_fields = None
 
     class Meta:
         abstract = True
@@ -278,24 +317,33 @@ class DuplicationProtectionMixin(DoubleBookInterface):
         cls = self.__class__
         if cls.dupcheck_signature_fields is None:
             return None
-        # translates foreign keys to the fieldname_id format,
-        # which is better for comparisons
-        sig_fields = list(
-            cls._meta.get_field(fname).column
-            for fname in cls.dupcheck_signature_fields
-        )
+
+        if cls.__dupcheck_signature_nt is None:
+            # translates foreign keys to the fieldname_id format,
+            # which is better for comparisons
+            sig_fields = list(
+                cls._meta.get_field(fname).column
+                for fname in cls.dupcheck_signature_fields
+            )
+            cls.__dupcheck_signature_nt = namedtuple(
+                self.__class__.__name__ + 'DuplicationSignature',
+                ['date', 'amount'] + sig_fields
+            )
+            cls.__dupcheck_sig_fields = sig_fields
+
+        sig_kwargs = {
+            field: getattr(self, field) for field in cls.__dupcheck_sig_fields
+        }
         # Problem: the resolution of most banks' reporting is a day.
         # Hence, we cannot use an exact timestamp as a cutoff point between
-        # imports, which would eliminate the need for duplicate 
+        # imports, which would eliminate the need for duplicate
         # checking in practice.
-        date = timezone.localdate(self.timestamp)
-        amt = getattr(self, cls.TOTAL_AMOUNT_FIELD_NAME).amount
-        return (date, amt) + tuple(
-            getattr(self, field) for field in sig_fields
-        )
+        sig_kwargs['date'] = timezone.localdate(self.timestamp)
+        sig_kwargs['amount'] = self.total_amount.amount
+        return cls.__dupcheck_signature_nt(**sig_kwargs)
 
 
-class BaseFinancialRecord(DoubleBookModel):
+class ConcreteAmountMixin(models.Model):
 
     total_amount = MoneyField(
         verbose_name=_('total amount'),
@@ -492,19 +540,8 @@ class BasePaymentQuerySet(DoubleBookQuerySet):
         return self.fully_matched()
 
 
-class BaseDebtRecord(BaseFinancialRecord):
+class BaseDebtRecord(DoubleBookModel):
 
-    @classmethod
-    def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
-        return cast(
-            Tuple[Type['BaseDebtPaymentSplit'], str], super().get_split_model()
-        )
-
-    @classmethod
-    def get_other_half_model(cls) -> Type['BasePaymentRecord']:
-        return cast(
-            Type['BasePaymentRecord'], super().get_other_half_model()
-        )
 
     is_refund = models.BooleanField(
         verbose_name=_('Refund/unmanaged'),
@@ -517,10 +554,30 @@ class BaseDebtRecord(BaseFinancialRecord):
         editable=False
     )
 
+    gnucash_category = models.ForeignKey(
+        GnuCashCategory,
+        verbose_name=_('GnuCash category'),
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+
     objects = BaseDebtQuerySet.as_manager()
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
+        return cast(
+            Tuple[Type['BaseDebtPaymentSplit'], str], super().get_split_model()
+        )
+
+    @classmethod
+    def get_other_half_model(cls) -> Type['BasePaymentRecord']:
+        return cast(
+            Type['BasePaymentRecord'], super().get_other_half_model()
+        )
 
     @property
     def amount_paid(self):
@@ -539,7 +596,12 @@ class BaseDebtRecord(BaseFinancialRecord):
         return self.fully_matched_date
 
 
-class BasePaymentRecord(BaseFinancialRecord):
+class BasePaymentRecord(DoubleBookModel):
+
+    objects = BasePaymentQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
 
     @classmethod
     def get_split_model(cls) -> Tuple[Type['BaseDebtPaymentSplit'], str]:
@@ -552,11 +614,6 @@ class BasePaymentRecord(BaseFinancialRecord):
         return cast(
             Type['BaseDebtRecord'], super().get_other_half_model()
         )
-
-    objects = BasePaymentQuerySet.as_manager()
-
-    class Meta:
-        abstract = True
 
     @property
     def credit_used(self):
@@ -662,3 +719,259 @@ class BaseDebtPaymentSplit(BaseTransactionSplit):
                     'debt_ts': loctimefmt(debt.timestamp)
                 }
             )
+
+NINE_DIGIT_MODPAIR = (783142319, 289747279)
+
+def parse_transaction_no(ogm, prefix_digit, match=None):
+    prefix, _ = parse_ogm(ogm, match)
+
+    prefix_str = str(prefix)
+    if prefix_str[0] != prefix_digit:
+        raise ValueError()
+    unpack = (int(prefix_str[1:]) * NINE_DIGIT_MODPAIR[1]) % 10**9
+    # ignore token digest, it already served its purpose
+    return unpack // 100
+
+class TransactionPartyQuerySet(models.QuerySet):
+    model: 'TransactionPartyMixin'
+    DEBT_BALANCE_FIELD = 'debt_balance_fromdb'
+
+    def by_payment_tracking_no(self, ogm):
+        try:
+            pk = parse_transaction_no(
+                ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
+            )
+        except ValueError:
+            raise self.model.DoesNotExist()
+        return self.get(pk=pk)
+
+    @validated_bulk_query(lambda x: x.payment_tracking_no)
+    def by_payment_tracking_nos(self, ogms):
+        def compute_pks():
+            for ogm in ogms:
+                try:
+                    yield parse_transaction_no(
+                        ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
+                    )
+                except ValueError:
+                    continue
+
+        pks = set(x for x in compute_pks())
+        if not pks:
+            return self.none()
+        return self.filter(pk__in=pks)
+
+    def with_debt_annotations(self):
+        # annotate debts relation
+        # this does NOT compute the debt balance/member annotation
+        return self.prefetch_related(
+            Prefetch(
+                self.model.DEBTS_RELATION,
+                queryset=self.model.get_debt_model().objects.with_payments()
+            )
+        )
+
+    def with_payment_annotations(self):
+        # annotate payments relation (for symmetry)
+        return self.prefetch_related(
+            Prefetch(
+                self.model.PAYMENTS_RELATION,
+                queryset=self.model.get_payment_model().objects.with_debts()
+            )
+        )
+
+    def with_debts_and_payments(self):
+        return self.with_debt_annotations().with_payment_annotations()
+
+    def with_debt_balances(self):
+        # TODO: figure out if this is even necessary
+        cls = self.__class__
+        if cls.DEBT_BALANCE_FIELD in self.query.annotations:
+            return self
+
+        # prefetch_related doesn't work and leads to
+        # confusing but nonetheless absolutely hilarious bugs.
+        # prefetching debts as InternalDebtItem.objects.with_payments(),
+        # and then annotating Sum(DEBT_BALANCE_FIELD) will cause
+        # Django to sum the primary keys of every debt object.
+
+        # hence, we have to make the following sacrifice to the
+        # Flying Spaghetti Monster.
+        base_debt_qs = self.model.get_debt_model().objects.unpaid()
+        tp_remote_fk = self.model.get_debt_remote_fk()
+        debt_balance_subq = base_debt_qs.filter(**{
+            tp_remote_fk: OuterRef('pk'),
+        }).order_by().values(tp_remote_fk).annotate(
+            total_balance=Coalesce(
+                Sum(
+                    DoubleBookQuerySet.UNMATCHED_BALANCE_FIELD,
+                    output_field=models.DecimalField()
+                ),
+                Value(Decimal('0.00')),
+                output_field=models.DecimalField()
+            )
+        ).values('total_balance')
+
+        return self.annotate(**{
+            cls.DEBT_BALANCE_FIELD: Coalesce(
+                Subquery(debt_balance_subq),
+                Value(Decimal('0.00')),
+                output_field=models.DecimalField()
+            )
+        })
+        # R'amen
+
+# TODO: auto-enforce equality of transaction parties accross debt/payment splits
+#  through reflection
+class TransactionPartyMixin(models.Model):
+
+    PAYMENT_TRACKING_PREFIX = None
+    DEBTS_RELATION = 'debts'
+    PAYMENTS_RELATION = 'payments'
+    _debt_model: Type[BaseDebtRecord] = None
+    _payment_model: Type[BasePaymentRecord] = None
+    _split_model: Type[BaseDebtPaymentSplit] = None
+    _debt_remote_fk: str = None
+    _payment_remote_fk: str = None
+    _debt_remote_fk_column: str = None
+    _payment_remote_fk_column: str = None
+
+    hidden_token = models.BinaryField(
+        max_length=8,
+        verbose_name=_('hidden token'),
+        help_text=_(
+            'Hidden unchanging token, for use in low-security '
+            'cryptographic operations. In principle never '
+            'displayed to any users.'
+        ),
+        editable=False,
+        default=make_token
+    )
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def _annotate_model_metadata(cls):
+        if cls._debt_model is not None:
+            return
+        debts_f = cls._meta.get_field(cls.DEBTS_RELATION)
+        payments_f = cls._meta.get_field(cls.PAYMENTS_RELATION)
+        cls._debt_model = debts_f.related_model
+        cls._payment_model = payments_f.related_model
+        if not issubclass(cls._debt_model, BaseDebtRecord):
+            raise TypeError('Debts relation does not point to a debt model')
+        if not issubclass(cls._payment_model, BasePaymentRecord):
+            raise TypeError(
+                'Payments relation does not point to a payment model'
+            )
+        cls._debt_remote_fk = debts_f.remote_field.name
+        cls._payment_remote_fk = payments_f.remote_field.name
+        cls._debt_remote_fk_column = debts_f.remote_field.column
+        cls._payment_remote_fk_column = payments_f.remote_field.column
+        models_consistent = (
+            cls._debt_model.get_other_half_model() == cls._payment_model
+            and cls._payment_model.get_other_half_model() == cls._debt_model
+        )
+        if not models_consistent:
+            raise TypeError(
+                'Payment and debt ledger classes are inconsistent.'
+            )
+        cls._split_model = cls._debt_model.get_split_model()[0]
+
+    @classmethod
+    def get_debt_model(cls):
+        cls._annotate_model_metadata()
+        return cls._debt_model
+
+    @classmethod
+    def get_payment_model(cls):
+        cls._annotate_model_metadata()
+        return cls._payment_model
+
+    @classmethod
+    def get_split_model(cls):
+        cls._annotate_model_metadata()
+        return cls._split_model
+
+    @classmethod
+    def get_debt_remote_fk(cls):
+        cls._annotate_model_metadata()
+        return cls._debt_remote_fk
+
+    @classmethod
+    def get_payment_remote_fk(cls):
+        cls._annotate_model_metadata()
+        return cls._payment_remote_fk
+
+    @classmethod
+    def get_debt_remote_fk_column(cls):
+        cls._annotate_model_metadata()
+        return cls._debt_remote_fk_column
+
+    @classmethod
+    def get_payment_remote_fk_column(cls):
+        cls._annotate_model_metadata()
+        return cls._payment_remote_fk_column
+
+    @classmethod
+    def parse_transaction_no(cls, ogm):
+        return parse_transaction_no(ogm, cls.PAYMENT_TRACKING_PREFIX)
+
+    def _payment_tracking_no(self, formatted):
+        # memoryview weirdness forces this
+        token_seed = bytes(self.hidden_token)[1]
+        raw = int('%07d%02d' % (
+            self.pk % 10 ** 7,
+            token_seed % 100,
+        )
+                  )
+        obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
+        prefix_str = '%s%09d' % (self.__class__.PAYMENT_TRACKING_PREFIX, obf)
+        return ogm_from_prefix(prefix_str, formatted)
+
+    @cached_property
+    def payment_tracking_no(self):
+        return self._payment_tracking_no(True)
+
+    @cached_property
+    def raw_payment_tracking_no(self):
+        return self._payment_tracking_no(False)
+
+    @cached_property
+    def debt_balance(self):
+        try:
+            return decimal_to_money(
+                getattr(self, TransactionPartyQuerySet.DEBT_BALANCE_FIELD)
+            )
+        except AttributeError:
+            # let's hope that you called this method with
+            # with_debt_annotations, otherwise RIP DB
+            # TODO: can we detect prefetched relations easily?
+            cls = self.__class__
+            return sum(
+                (d.balance for d in getattr(self, cls.DEBTS_RELATION).all()),
+                Money(0, settings.BOOKKEEPING_CURRENCY)
+            )
+
+    @cached_property
+    def debt_paid(self):
+        # see above
+        cls = self.__class__
+        return sum(
+            (d.amount_paid for d in getattr(self, cls.DEBTS_RELATION).all()),
+            Money(0, settings.BOOKKEEPING_CURRENCY)
+        )
+
+    @cached_property
+    def payment_total(self):
+        # this one needs with_payment_annotations to be efficient
+        cls = self.__class__
+        return sum(
+            (d.total_amount for d in getattr(self, cls.PAYMENTS_RELATION).all()),
+            Money(0, settings.BOOKKEEPING_CURRENCY)
+        )
+
+    @cached_property
+    def to_refund(self):
+        return self.payment_total - self.debt_paid

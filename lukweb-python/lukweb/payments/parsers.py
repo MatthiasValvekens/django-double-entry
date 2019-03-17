@@ -1,7 +1,6 @@
 import datetime
 import re
 from _pydecimal import Decimal, DecimalException
-from csv import DictReader
 
 from django.conf import settings
 from django.utils import timezone
@@ -14,7 +13,7 @@ from .utils import (
     PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER, OGM_REGEX,
     parse_ogm, ogm_from_prefix
 )
-from ..utils import _dt_fallback
+from ..utils import _dt_fallback, CIDictReader
 
 __all__ = [
     'FinancialCSVParser', 'PaymentCSVParser', 'KBCCSVParser', 'FortisCSVParser',
@@ -28,11 +27,12 @@ class FinancialCSVParser:
     date_column_name= 'datum'
 
     class TransactionInfo:
-        def __init__(self, *, line_no, amount, timestamp):
+        def __init__(self, *, line_no, amount, timestamp, account_lookup_str):
             self.ledger_entry = None
             self.line_no = line_no
             self.amount = amount
             self.timestamp = _dt_fallback(timestamp)
+            self.account_lookup_str = account_lookup_str
 
     def __init__(self, csv_file):
         self.csv_file = csv_file
@@ -86,7 +86,7 @@ class FinancialCSVParser:
             self._file_read = True
             return
 
-        csv = DictReader(self.csv_file, delimiter=self.delimiter)
+        csv = CIDictReader(self.csv_file, delimiter=self.delimiter)
 
         def gen():
             for line_no, row in enumerate(csv):
@@ -145,21 +145,18 @@ class FinancialCSVParser:
             return None
 
 
-class MemberTransactionParser(FinancialCSVParser):
-    member_column_name = 'lid'
-
-    class TransactionInfo(FinancialCSVParser.TransactionInfo):
-        def __init__(self, *, member_str, **kwargs):
-            super().__init__(**kwargs)
-            self.member_str = member_str
+class AccountColumnTransactionParser(FinancialCSVParser):
+    account_column_name = 'account'
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
         if parsed is None:
             return None
-        parsed['member_str'] = row[self.member_column_name]
+        parsed['account_lookup_str'] = row[self.account_column_name]
         return parsed
 
+class MemberTransactionParser(AccountColumnTransactionParser):
+    account_column_name = 'lid'
 
 class PaymentCSVParser(FinancialCSVParser):
 
@@ -202,8 +199,26 @@ class DebtCSVParser(MemberTransactionParser):
         parsed = super().parse_row_to_dict(line_no, row)
         if parsed is None:
             return None
-        parsed['comment'] = row[self.comment_column_name]
-        parsed['gnucash'] = row[self.gnucash_column_name]
+        column_required_msg = _('You must supply a value for \'%(colname)s\'.')
+
+        parsed['comment'] = comment = row[self.comment_column_name]
+        if not comment:
+            self.error(
+                line_no, column_required_msg % {
+                    'colname': self.comment_column_name,
+                }
+            )
+            return None
+
+        parsed['gnucash'] = gnucash = row[self.gnucash_column_name]
+        if not gnucash:
+            self.error(
+                line_no, column_required_msg % {
+                    'colname': self.gnucash_column_name,
+                }
+            )
+            return None
+
         # coerce falsy values
         parsed['filter_slug'] = slugify(row.get('filter', '')) or None
         activity_id = row.get(self.activity_column_name, None)
@@ -276,11 +291,6 @@ class BankCSVParser(PaymentCSVParser):
 
     verbose_name = None
 
-    class TransactionInfo(PaymentCSVParser.TransactionInfo):
-        def __init__(self, *, ogm, **kwargs):
-            super().__init__(**kwargs)
-            self.ogm = ogm
-
     def get_nature(self, line_no, row):
         return PAYMENT_NATURE_TRANSFER
 
@@ -294,7 +304,7 @@ class BankCSVParser(PaymentCSVParser):
         ogm = self.get_ogm(line_no, row)
         if ogm is None:
             return None
-        parsed['ogm'] = ogm
+        parsed['account_lookup_str'] = ogm
         return parsed
 
 
@@ -333,6 +343,8 @@ class FortisCSVParser(BankCSVParser):
 class KBCCSVParser(BankCSVParser):
     # The inconsistent capitalisation in column names
     # is *not* a typo on my part.
+    # (although it shouldn't be necessary any longer given the fact that
+    # csv headers are now parsed case-insensitively)
     delimiter = ';'
     verbose_name = _('KBC .csv parser')
 
@@ -343,7 +355,6 @@ class KBCCSVParser(BankCSVParser):
     def get_ogm(self, line_no, row):
         ogm_str = row['gestructureerde mededeling'].strip()
         if not ogm_str:
-            # Always assume that there will be simpletons who don't know the
             # this is a fallback option, so we don't require this column
             # to be present
             ogm_str = row.get('Vrije mededeling', '').strip()

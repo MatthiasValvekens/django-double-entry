@@ -24,44 +24,8 @@ from ...fields import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    'GnuCashCategory', 'InternalDebtItem', 'InternalPayment',
-    'InternalPaymentSplit'
+    'InternalDebtItem', 'InternalPayment', 'InternalPaymentSplit'
 ]
-
-
-class GnuCashCategory(models.Model):
-    # TODO: can we branch on whether citext is available or not?
-    # TODO: what kind of validation do we want here?
-    name = models.CharField(
-        max_length=255,
-        verbose_name=_('GnuCash category name'),
-        unique=True,
-    )
-
-    class Meta:
-        verbose_name = _('GnuCash category')
-        verbose_name_plural = _('GnuCash categories')
-        ordering = ('name',)
-
-    @classmethod
-    def get_category(cls, name, create=True):
-        if not name:
-            return None
-        if create:
-            obj, created = cls.objects.get_or_create(
-                name__iexact=name,
-                # need to set defaults when using __iexact
-                defaults={'name': name}
-            )
-        else:
-            try:
-                obj = cls.objects.get(name__iexact=name)
-            except cls.DoesNotExist:
-                obj = cls(name=name)
-        return obj
-
-    def __str__(self):
-        return self.name
 
 
 class IDIQuerySet(accounting_base.BaseDebtQuerySet):
@@ -84,7 +48,8 @@ class IDIQuerySet(accounting_base.BaseDebtQuerySet):
         })
 
 
-class InternalDebtItem(accounting_base.BaseDebtRecord):
+class InternalDebtItem(accounting_base.BaseDebtRecord,
+                       accounting_base.ConcreteAmountMixin):
 
     member = ChoirMemberField(
         on_delete=models.PROTECT,
@@ -97,18 +62,6 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
         verbose_name=_('comment'),
         max_length=255,
         blank=False,
-    )
-
-    # TODO: we probably want to add validation to the admin
-    # that requires this field to be set unless activity_participation
-    # is null. This is nontrivial, since activity_participation
-    # is never included in admin forms.
-    gnucash_category = models.ForeignKey(
-        GnuCashCategory,
-        verbose_name=_('GnuCash category'),
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True
     )
 
     # TODO: we should enforce participation_allowed on object creation
@@ -148,6 +101,8 @@ class InternalDebtItem(accounting_base.BaseDebtRecord):
     def clean(self):
         if not self.filter_slug:
             self.filter_slug = None
+        if not self.comment:
+            self.comment = ''
 
     @property
     def amount(self):
@@ -217,7 +172,8 @@ class IPQuerySet(accounting_base.BasePaymentQuerySet,
                  accounting_base.DuplicationProtectedQuerySet):
     pass
 
-class InternalPayment(accounting_base.BasePaymentRecord, 
+class InternalPayment(accounting_base.BasePaymentRecord,
+                      accounting_base.ConcreteAmountMixin,
                       accounting_base.DuplicationProtectionMixin):
 
     dupcheck_signature_fields = ('nature', 'member')

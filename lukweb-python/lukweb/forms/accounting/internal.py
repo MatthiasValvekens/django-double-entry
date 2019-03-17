@@ -1,22 +1,25 @@
 import logging
+import re
 from collections import defaultdict
 from decimal import Decimal
 from itertools import chain
-from typing import Iterator
+from typing import Tuple, Iterable
 
 from django import forms
 from django.core.exceptions import SuspiciousOperation
-from django.db.models import Q
 from django.forms.models import ModelForm, modelformset_factory
 from django.shortcuts import render
 from django.utils.translation import (
     ugettext_lazy as _, ugettext
 )
 
+from lukweb.models.accounting import base as accounting_base
+from lukweb.models.accounting.base import TransactionPartyMixin
 from . import bulk_utils
 from .base import *
 from .bulk_utils import (
-    make_payment_splits
+    make_payment_splits,
+    ApportionmentResult,
 )
 from ...payments import (DebtCSVParser, MiscDebtPaymentCSVParser)
 from .utils import GnuCashFieldMixin
@@ -49,13 +52,13 @@ class EphemeralPaymentForm(ModelForm):
 
     class Meta:
         model = models.InternalPayment
-        # we don't include the member field; this is intentional
+        # we don't include the member field as such; this is intentional
         # since we don't want the member records to be fetched at
         # the form level. Two reasons:
         #  (a) inefficient as fuck
         #  (b) we need to query them together with the debt data
         #      to generate the splits
-        fields = ('nature', 'total_amount', 'timestamp')
+        fields = ('nature', 'total_amount', 'timestamp', 'member_id')
 
 
 class EphemeralAddDebtForm(ModelForm):
@@ -68,7 +71,7 @@ class EphemeralAddDebtForm(ModelForm):
 
     class Meta:
         model = models.InternalDebtItem
-        fields = ('comment', 'total_amount', 'timestamp')
+        fields = ('comment', 'total_amount', 'timestamp', 'member_id')
 
 
 class ProfileAddDebtForm(GnuCashFieldMixin):
@@ -200,7 +203,180 @@ def lookup_act_registration_ids(member_ids_by_activity: dict):
     unseen = all_pairs - result.keys()
     return result, unseen
 
-class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
+
+UID_FORMAT = re.compile(
+    r'(?P<uid>\d+)(:(?P<token>\d+-[a-z0-9]+-[0-9a-f]{20})'
+    ':(?P<salt>[-_A-Za-z0-9]+))?'
+)
+
+class ByEmailIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
+
+    @classmethod
+    def lookup_key_for_account(cls, account):
+        return account.user.email
+
+    def append(self, tinfo):
+        string = tinfo.account_lookup_str
+        if '@' in string:
+            self.transaction_index[string].append(tinfo)
+            return True
+        else:
+            return False
+
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        member_email_qs, unseen = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().by_emails(
+            self.transaction_index.keys(), validate_unseen=True
+        )
+
+        for email in unseen:
+            ts = self.transaction_index[email]
+            self.ledger_preparator.unknown_account(
+                email, [t.line_no for t in ts]
+            )
+        return member_email_qs
+
+
+class ByNameIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
+
+    @classmethod
+    def lookup_key_for_account(cls, account):
+        return account.full_name
+
+    def append(self, tinfo):
+        # this method isn't picky
+        string = tinfo.account_lookup_str
+        self.transaction_index[string].append(tinfo)
+        return True
+
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        member_name_qs, unseen, duplicates = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().by_full_names(
+            self.transaction_index.keys(),
+            validate_unseen=True, validate_nodups=True
+        )
+
+        for name in unseen:
+            ts = self.transaction_index[name.casefold()]
+            self.ledger_preparator.unknown_account(name, [t.line_no for t in ts])
+
+        for name in duplicates:
+            ts = self.transaction_index[name.casefold()]
+            self.ledger_preparator.ambiguous_account(
+                name, [t.line_no for t in ts]
+            )
+
+        return member_name_qs
+
+class ByUIDIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
+
+    @classmethod
+    def lookup_key_for_account(cls, party):
+        return str(party.pk)
+
+    def append(self, tinfo):
+        string = tinfo.account_lookup_str
+        match = UID_FORMAT.match(string)
+        if match is None:
+            return False
+        # if the validation token is left out, we trust that
+        # the operator knows what they're doing
+        token = match.group('token')
+        uid_str = match.group('uid')
+        uid = int(uid_str)
+        if token is not None:
+            self.transaction_index[uid].append(
+                (tinfo, (token, match.group('salt')))
+            )
+        else:
+            self.transaction_index[uid].append((tinfo, None))
+        # save canonical version of the lookup str
+        tinfo.account_lookup_str = uid_str
+        return True
+
+    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+        member_uid_qs = models.ChoirMember.objects \
+            .select_related('user').with_debt_annotations().filter(
+            pk__in=self.transaction_index.keys()
+        )
+        for m in member_uid_qs:
+            tinfos = self.transaction_index[m.pk]
+            for info, validation in tinfos:
+                if validation is not None:
+                    token, salt = validation
+                    token_valid = m.validate_external_uid_token(
+                        external_form_salt=salt, bare_token=token
+                    )
+                    if not token_valid:
+                        self.ledger_preparator.error_at_line(
+                            info.line_no,
+                            _(
+                                'Token %(token)s is invalid for uid %(uid)d '
+                                'with salt value %(salt)s. Skipped processing.'
+                            ), params={
+                                'token': token, 'uid': m.pk, 'salt': salt,
+                            }
+                        )
+                        # This will cause the transaction to be eliminated
+                        # during the ledger preparation stage
+                        info.account_lookup_str = None
+
+        unseen_uids = self.transaction_index.keys() - set(
+            m.pk for m in member_uid_qs
+        )
+        for pk in unseen_uids:
+            ts = self.transaction_index[pk]
+            self.ledger_preparator.unknown_account(
+                str(pk), [t.line_no for t, v in ts]
+            )
+        return member_uid_qs
+
+
+class FetchMembersMixin(bulk_utils.FetchTransactionAccountsMixin):
+    transaction_account_model = models.ChoirMember
+
+    unknown_account_message = _(
+        '%(account)s does not designate a registered member.'
+    )
+
+    ambiguous_account_message = _(
+        '%(account)s designates multiple registered members. '
+        'Skipped processing.',
+    )
+
+    def get_lookup_builders(self):
+        return [
+            ByUIDIndexBuilder(self),
+            ByEmailIndexBuilder(self),
+            ByNameIndexBuilder(self)
+        ]
+
+    # TODO: In the long term I would like to get rid of these eph
+    # forms as well. That should be a bit easier to plan with the
+    # new bulk_utils module.
+    def form_kwargs_for_transaction(self, transaction):
+        kwargs = super().form_kwargs_for_transaction(transaction)
+        member = transaction.ledger_entry.member
+        kwargs['member_id'] = member.pk
+        kwargs['name'] = member.full_name
+        kwargs['email'] = member.user.email
+        return kwargs
+
+    def model_kwargs_for_transaction(self, transaction):
+        kwargs = super().model_kwargs_for_transaction(transaction)
+        if kwargs is None:
+            return None
+        try:
+            member = self._by_lookup_str[transaction.account_lookup_str]
+            kwargs['member'] = member
+            return kwargs
+        except KeyError:
+            # member search errors have already been logged
+            # in the preparation step, so we don't care
+            return None
+
+
+class InternalDebtRecordPreparator(FetchMembersMixin):
     formset_prefix = 'bulk-add-debt'
     formset_class = BulkAddDebtFormSet
     model = models.InternalDebtItem
@@ -212,7 +388,7 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
         for info in self.transactions:
             if info.activity_id is None:
                 continue
-            mem = self.get_member(member_str=info.member_str)
+            mem = self.get_account(lookup_str=info.account_lookup_str)
             by_activity_id[info.activity_id].append(mem.pk)
         self._actreg_index, notfound = lookup_act_registration_ids(
             by_activity_id
@@ -224,7 +400,7 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
                     'Member %(member)s with id %(member_id)d appears not to '
                     'be registered for activity with id %(act_id)d.'
                 ), params={
-                    'member': self.get_member(pk=member_id),
+                    'member': self.get_account(pk=member_id),
                     'member_id': member_id,
                     'act_id': activity_id
                 }
@@ -262,12 +438,12 @@ class InternalDebtRecordPreparator(bulk_utils.FetchMembersMixin):
 
 # This class can process both electronic transfers and
 # cash payments
-class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
+class BaseBulkPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
+    transaction_party_model = models.ChoirMember
 
-    # TODO: this kills deletion support, we should add that back in
-    def save(self, commit=True):
-        from django.db import connection
-        can_bulk_save = connection.features.can_return_ids_from_bulk_insert
+    def prepare_payment_instances(self) -> Tuple[
+        Iterable[int], Iterable[accounting_base.BasePaymentRecord]
+    ]:
         payments_by_member = defaultdict(lambda: defaultdict(list))
 
         filtered_mode = None
@@ -287,107 +463,56 @@ class BaseBulkPaymentFormSet(forms.BaseModelFormSet):
                 nature=data['nature'],
                 member_id=member_id
             )
+            payment.spoof_matched_balance(Decimal('0.00'))
             payments_by_member[member_id][debt_filter].append(payment)
 
-        member_qs = models.ChoirMember.objects.filter(
-            pk__in=list(payments_by_member.keys())
-        ).with_debt_annotations()
+        self._payments_by_member = payments_by_member
+        self.filtered_mode = bool(filtered_mode)
 
-        financial_globals = models.FinancialGlobals.load()
-        refund_category = financial_globals.refund_credit_gnucash_acct
-        autogenerate_refunds = financial_globals.autogenerate_refunds
-        def filtered(member):
-            member_payments = payments_by_member[member.pk]
-            all_debts = member.debts.unpaid().order_by('timestamp')
-            debts_by_filter = defaultdict(list)
-            for debt in all_debts:
-                debts_by_filter[debt.filter_slug].append(debt)
-
-            remaining_payments = []
-            for filter_slug, pmts in member_payments.items():
-                # we handle unrestricted payments later
-                if filter_slug is None:
-                    raise SuspiciousOperation(
-                        '\'None\' filter slug found in filtered '
-                        'payment import. This shouldn\'t happen without '
-                        'tampering.'
-                    )
-                results = yield from make_payment_splits(
-                    payments=sorted(pmts, key=lambda p: p.timestamp),
-                    debts=debts_by_filter[filter_slug],
-                    split_model=models.InternalPaymentSplit
-                )
-                remaining_payments += results.remaining_payments
-            # we cannot yield from the refund splits here
-            # since the refund object hasn't been saved yet
-            if refund_category is not None and autogenerate_refunds:
-                return bulk_utils.refund_overpayment(
-                    remaining_payments, debt_kwargs={
-                    'member': member, 'gnucash_category': refund_category,
-                    'comment': ''
-                })
-
-        def unfiltered(member):
-            member_payments = payments_by_member[member.pk][None]
-            results = yield from make_payment_splits(
-                payments=sorted(member_payments, key=lambda p: p.timestamp),
-                debts=member.debts.unpaid().order_by('timestamp'),
-                split_model=models.InternalPaymentSplit
-            )
-            if refund_category is not None and autogenerate_refunds:
-                return bulk_utils.refund_overpayment(
-                    results.remaining_payments, debt_kwargs={
-                        'member': member, 'gnucash_category': refund_category,
-                        'comment': ''
-                    }
-                )
-            # we cannot yield from the refund splits here
-            # since the refund object hasn't been saved yet
-
-        split_generator = filtered if filtered_mode else unfiltered
-
-        # save payments before building splits, otherwise the ORM
-        # will not set fk's correctly
         def all_payments():
             for payment_set in payments_by_member.values():
                 yield from chain(*iter(payment_set.values()))
 
-        if commit:
-            if can_bulk_save:
-                models.InternalPayment.objects.bulk_create(all_payments())
-            else:
-                logger.debug(
-                    'Database does not support RETURNING on bulk inserts. '
-                    'Fall back to saving in a loop.'
+        return payments_by_member.keys(), list(all_payments())
+
+    def generate_filtered_splits(self, member):
+        all_results = ApportionmentResult()
+        member_payments = self._payments_by_member[member.pk]
+        all_debts = member.debts.unpaid().order_by('timestamp')
+        debts_by_filter = defaultdict(list)
+        for debt in all_debts:
+            debts_by_filter[debt.filter_slug].append(debt)
+
+        for filter_slug, pmts in member_payments.items():
+            # we handle unrestricted payments later
+            if filter_slug is None:
+                raise SuspiciousOperation(
+                    '\'None\' filter slug found in filtered '
+                    'payment import. This shouldn\'t happen without '
+                    'tampering.'
                 )
-                for payment in all_payments():
-                    payment.save()
+            results = yield from make_payment_splits(
+                payments=sorted(pmts, key=lambda p: p.timestamp),
+                debts=debts_by_filter[filter_slug],
+                split_model=models.InternalPaymentSplit
+            )
+            all_results += results
 
-        def splits_to_create() -> Iterator[models.InternalPaymentSplit]:
-            refunds_to_save = []
-            refund_splits_to_save = []
+        return all_results
 
-            for member in member_qs:
-                refund_data = yield from split_generator(member)
-                if refund_data is not None:
-                    refund_object, refund_splits = refund_data
-                    if can_bulk_save:
-                        refunds_to_save.append(refund_object)
-                        refund_splits_to_save.append(refund_splits)
-                    else:
-                        refund_object.save()
-                        yield from refund_splits
+    def generate_unfiltered_splits(self, member):
+        member_payments = self._payments_by_member[member.pk][None]
+        return make_payment_splits(
+            payments=sorted(member_payments, key=lambda p: p.timestamp),
+            debts=member.debts.unpaid().order_by('timestamp'),
+            split_model=models.InternalPaymentSplit
+        )
 
-            if can_bulk_save:
-                # save all refund objects and create/yield all refund splits
-                models.InternalDebtItem.objects.bulk_create(refunds_to_save)
-                for splits in refund_splits_to_save:
-                    yield from splits
-
-        if commit:
-            models.InternalPaymentSplit.objects.bulk_create(splits_to_create())
-
-        return all_payments()
+    def generate_splits(self, party):
+        if self.filtered_mode:
+            return self.generate_filtered_splits(party)
+        else:
+            return self.generate_unfiltered_splits(party)
 
 
 BulkPaymentFormSet = modelformset_factory(
@@ -397,7 +522,7 @@ BulkPaymentFormSet = modelformset_factory(
 )
 
 
-class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
+class MiscDebtPaymentPreparator(FetchMembersMixin,
                                 bulk_utils.DuplicationProtectedPreparator,
                                 bulk_utils.CreditApportionmentMixin):
 
@@ -435,8 +560,8 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
         params = super().dup_error_params(signature_used)
         # get human-readable value
         nature_choices = dict(models.InternalPayment.PAYMENT_NATURE_CHOICES)
-        params['nature'] = nature_choices[signature_used[2]]
-        params['member'] = str(self.get_member(pk=signature_used[3]))
+        params['nature'] = nature_choices[signature_used.nature]
+        params['member'] = str(self.get_account(pk=signature_used.member_id))
         return params
 
     def form_kwargs_for_transaction(self, transaction):
@@ -491,10 +616,10 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
         params = super().overpayment_error_params(debt_key, *args)
         if self.filtered_mode:
             member_id, filter_slug = debt_key
-            params['member'] = str(self.get_member(pk=member_id))
+            params['member'] = str(self.get_account(pk=member_id))
             params['filter_slug'] = filter_slug
         else:
-            params['member'] = str(self.get_member(pk=debt_key))
+            params['member'] = str(self.get_account(pk=debt_key))
         return params
 
     def transaction_buckets(self):
@@ -514,7 +639,7 @@ class MiscDebtPaymentPreparator(bulk_utils.FetchMembersMixin,
                 trans_buckets[member_id].append(t)
 
         debt_qs = models.InternalDebtItem.objects.filter(
-            member_id__in=self.member_ids()
+            member_id__in=self.account_ids()
         ).with_payments().unpaid().order_by('timestamp')
 
         debt_buckets = defaultdict(list)
@@ -573,16 +698,7 @@ class BulkPaymentUploadForm(bulk_utils.FinancialCSVUploadForm):
 
 
 class InternalPaymentSplitFormSet(InlineTransactionSplitFormSet):
-
-    def base_filter(self):
-        qs = Q(member=self.instance.member)
-        if isinstance(self.instance, models.InternalDebtItem):
-            qs &= Q(timestamp__gte=self.instance.timestamp)
-        elif isinstance(self.instance, models.InternalPayment):
-            qs &= Q(timestamp__lte=self.instance.timestamp)
-        else:
-            raise TypeError
-        return qs
+    transaction_party_model = models.ChoirMember
 
 
 def recompute_payment_splits(payments, debt_filter=None, **kwargs):

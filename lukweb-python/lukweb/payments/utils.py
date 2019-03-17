@@ -2,6 +2,7 @@ import re
 from collections import defaultdict
 from decimal import Decimal
 
+from django.http import HttpResponse
 from django.conf import settings
 from django.forms import ValidationError
 from django.utils import timezone
@@ -10,16 +11,20 @@ from django.utils.translation import (
     pgettext,
 )
 from djmoney.money import Money
+from moneyed import EUR
 
 from ..utils import _dt_fallback
+
+import logging
+logger = logging.getLogger(__name__)
 
 __all__ = [
     'PAYMENT_NATURE_CASH', 'PAYMENT_NATURE_OTHER', 'PAYMENT_NATURE_TRANSFER',
     'OGM_RESERVATION_PREFIX', 'OGM_INTERNAL_DEBT_PREFIX',
     'generate_qif', 'VALID_OGM_PREFIXES', 'OGM_REGEX', 'decimal_to_money',
-    'parse_ogm', 'parse_internal_debt_ogm', 'parse_reservation_ogm',
+    'parse_ogm', 'valid_ogm',
     'ogm_from_prefix', 'check_payment_change_permissions', 'any_payment_access',
-    'valid_ogm', 'format_internal_debt_ogm', 'format_reservation_ogm',
+    'epc_qr_code_response'
 ]
 
 PAYMENT_NATURE_CASH = 1
@@ -33,9 +38,6 @@ VALID_OGM_PREFIXES = [
     OGM_RESERVATION_PREFIX, 
     OGM_INTERNAL_DEBT_PREFIX,
 ]
-
-NINE_DIGIT_MODPAIR = (783142319, 289747279)
-THREE_DIGIT_MODPAIR = (723, 787) 
 
 OGM_PRE_POST = '(\+\+\+|\*\*\*)?'
 OGM_REGEX = '%s%s%s' % (    
@@ -129,66 +131,6 @@ def valid_ogm(ogm):
             code='invalid',
             params={'modulus': remainder}
         )
-
-
-def parse_reservation_ogm(ogm, match=None):
-    prefix, _ = parse_ogm(ogm, match)
-
-    prefix_str = str(prefix)
-    if prefix_str[0] != OGM_RESERVATION_PREFIX:
-        raise ValueError()
-
-    event_id = (int(prefix_str[1:4]) * THREE_DIGIT_MODPAIR[1]) % 1000
-    obf_rsvid = int(prefix_str[4:9])
-    return event_id, obf_rsvid
-
-
-def format_reservation_ogm(reservation, formatted=True): 
-    # Guaranteed to be unique, provided that
-    # the number of registrations per event
-    # does not exceed 100000, and booking 
-    # records are purged after every event.
-    # There is some very reasonable leeway, though:
-    # up to 1000 events are allowed to exist concurrently
-    # with collisions being impossible
-
-    obf_event_pk = (reservation.event.pk * THREE_DIGIT_MODPAIR[0]) % 1000
-
-    # all ticketing-related payment IDs start with 1
-    # TODO: document this properly in the ticketing system docs
-    prefix_fmt = OGM_RESERVATION_PREFIX + '%03d%05d%01d'
-    token_seed = bytes(reservation.token_a)[0]
-    prefix_str = prefix_fmt % (
-        obf_event_pk, 
-        reservation.obfuscated_id, 
-        token_seed % 10,
-    )
-    return ogm_from_prefix(prefix_str, formatted)
-
-
-def parse_internal_debt_ogm(ogm, match=None):
-    prefix, _ = parse_ogm(ogm, match)
-
-    prefix_str = str(prefix)
-    if prefix_str[0] != OGM_INTERNAL_DEBT_PREFIX:
-        raise ValueError() 
-    unpack = (int(prefix_str[1:]) * NINE_DIGIT_MODPAIR[1]) % 10**9
-    # ignore token digest, it already served its purpose
-    return unpack // 100
-
-
-def format_internal_debt_ogm(member, formatted=True):
-    # memoryview weirdness forces this
-    token_seed = bytes(member.hidden_token)[1]
-    raw = int('%07d%02d' % (
-            member.pk % 10 ** 7,
-            token_seed % 100,
-        )
-    )
-    obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
-    prefix_str = '%s%09d' % (OGM_INTERNAL_DEBT_PREFIX, obf)
-    return ogm_from_prefix(prefix_str, formatted)
-
 
 def generate_qif(start, end, by_processed_ts=True):
     from ..models import InternalPaymentSplit, FinancialGlobals
@@ -301,3 +243,56 @@ def generate_qif(start, end, by_processed_ts=True):
     result = '\n'.join(format_qif())
     activate(old_lang)
     return result
+
+
+def epc_qr_code_response(*, transaction_amount: Money,
+                         remittance_info, sepa_purpose):
+    from ..models import FinancialGlobals
+
+    if len(sepa_purpose) != 4:
+        raise ValueError('SEPA AT-44 Purpose must consist of 4 characters.')
+    if transaction_amount.currency != EUR:
+        raise ValueError(
+            'Can only use EPC codes with amounts in EUR, not %s.',
+            transaction_amount.currency
+        )
+
+    fin_globals: FinancialGlobals = FinancialGlobals.load()
+    if not all([fin_globals.sepa_bic, fin_globals.sepa_beneficiary,
+               fin_globals.choir_iban]):
+        logger.warning(
+            'Financial globals incomplete -- could not dispatch EPC QR code.'
+        )
+        return HttpResponse('Improperly configured', status=503)
+    payload = (
+        'BCD\n' # service identifier
+        '001\n' # version number
+        '1\n'   # charset (1 = UTF-8)
+        'SCT\n' # ident code (SCT = SEPA Credit Transfer)
+        '%(bic)s\n'
+        '%(beneficiary)s\n'
+        '%(iban)s\n'
+        'EUR%(amount).2f\n'
+        '%(purpose)s\n'
+        '%(remittance_info)s\n'
+    ) % {
+        'bic': fin_globals.sepa_bic,
+        'beneficiary': fin_globals.sepa_beneficiary,
+        'iban': fin_globals.choir_iban.replace(' ', ''),
+        'amount': transaction_amount.amount,
+        'purpose': sepa_purpose,
+        'remittance_info': remittance_info
+    }
+
+    try:
+        import qrcode
+        import qrcode.image.svg
+
+        img = qrcode.make(
+            payload, image_factory=qrcode.image.svg.SvgImage
+        )
+        response = HttpResponse(content_type='image/svg+xml')
+        img.save(response)
+        return response
+    except ImportError:
+        return HttpResponse('QR code not available', status=503)
