@@ -530,6 +530,7 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
     payment_fk_name = None
     debt_fk_name = None
     _trans_buckets = None
+    results: ApportionmentResult = None
 
     @property
     def split_model(self) -> Type[ST]:
@@ -567,7 +568,8 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
                 'Please resolve this issue manually.'
             )
 
-    def simulate_apportionments(self, debt_key, debts, transactions):
+    def simulate_apportionments(self, debt_key, debts, transactions) \
+            -> ApportionmentResult:
         payments = sorted([
                 t.ledger_entry for t in transactions
             ],
@@ -602,15 +604,20 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
                     results.remaining_payments
                 )
             )
+        return results
 
     def review(self):
         super().review()
         # compute the total credit used vs the total
         # credit established, and notify the treasurer
         self._trans_buckets = self.transaction_buckets()
+        self.results = ApportionmentResult()
         for key, transactions in self._trans_buckets.items():
             debts = self.debts_for(key)
-            self.simulate_apportionments(key, debts, transactions)
+            # accumulate results for (optional) later processing
+            self.results += self.simulate_apportionments(
+                key, debts, transactions
+            )
 
 
 class StandardCreditApportionmentMixin(CreditApportionmentMixin,

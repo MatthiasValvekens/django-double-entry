@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from typing import Iterable
 
 from django.shortcuts import render
@@ -191,6 +192,8 @@ class ReservationTransferPaymentPreparator(TransferPaymentPreparator):
     formset_prefix = 'reservation-payment-transfers'
     prefix_digit = payments.OGM_RESERVATION_PREFIX
     transaction_party_model = models.Customer
+    reservations_paid = None
+    incomplete_payments = None
 
     def dup_error_params(self, signature_used):
         params = super().dup_error_params(signature_used)
@@ -215,6 +218,25 @@ class ReservationTransferPaymentPreparator(TransferPaymentPreparator):
         kwargs['method'] = models.PAYMENT_METHOD_PREPAID
         return kwargs
 
+    def review(self):
+        super().review()
+        fp_by_customer = defaultdict(list)
+        pp_by_customer = defaultdict(list)
+        for reservation in self.results.fully_paid_debts:
+            fp_by_customer[reservation.owner].append(reservation)
+        for reservation in self.results.remaining_debts:
+            # the allocation methods cache matched_balance, even though
+            # this information hasn't landed in the database yet.
+            # we only generate warnings for partially paid reservations, i.e.
+            # reservations for which some payment has been received, but
+            # haven't been paid in full
+            if reservation.unmatched_balance and reservation.matched_balance:
+                pp_by_customer[reservation.owner].append(reservation)
+
+        self.reservations_paid = fp_by_customer
+        self.incomplete_payments = pp_by_customer
+
+
     def debts_for(self, debt_key):
         return self._debt_buckets[debt_key]
 
@@ -238,6 +260,8 @@ class BulkTransferUploadForm(bulk_utils.FinancialCSVUploadForm):
             'internaldebt_formset': internaldebt.formset,
             'reservation_proc_errors': reservations.errors,
             'reservation_formset': reservations.formset,
+            'reservations_paid': reservations.reservations_paid.items(),
+            'reservations_incomplete': reservations.incomplete_payments.items()
         })
 
         return render(
