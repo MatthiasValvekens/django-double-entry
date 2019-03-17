@@ -1,5 +1,6 @@
 import logging
 from decimal import Decimal
+from typing import Type
 
 from django import forms
 from django.conf import settings
@@ -22,7 +23,8 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 class InlineTransactionSplitFormSet(forms.BaseInlineFormSet):
- 
+    transaction_party_model: Type[accounting_base.TransactionPartyMixin] = None
+
     def get_form_kwargs(self, index):
         kwargs = super().get_form_kwargs(index)
         kwargs['parent_object'] = self.instance
@@ -30,14 +32,33 @@ class InlineTransactionSplitFormSet(forms.BaseInlineFormSet):
         return kwargs
 
     def base_filter(self):
-        return Q()
+        # grab all ledger entries corresponding to this member/customer/...
+        # in the other half of this double ledger
+        #  that can be paired up with the ledger entry we're currently editing
+        debt_act_fk = self.transaction_party_model.get_debt_remote_fk()
+        pmt_act_fk = self.transaction_party_model.get_payment_remote_fk()
+        if isinstance(self.instance, accounting_base.BaseDebtRecord):
+            account = getattr(self.instance, debt_act_fk)
+            return Q(**{
+                pmt_act_fk: account,
+                'timestamp__gte': self.instance.timestamp
+            })
+        elif isinstance(self.instance, accounting_base.BasePaymentRecord):
+            account = getattr(self.instance, pmt_act_fk)
+            return Q(**{
+                debt_act_fk: account,
+                'timestamp__lte': self.instance.timestamp
+            })
+        else:
+            raise TypeError
 
     @cached_property
     def _admissible_counterpart_queryset(self):
         other_half_model = self.instance.__class__.get_other_half_model()
         other_half_objects = other_half_model._meta.default_manager
+        q = self.base_filter()
         base_qs = other_half_objects.with_remote_accounts().filter(
-            self.base_filter()
+            q
         ).unmatched().order_by('-timestamp')
         
         split_model, counterpart_name = other_half_model.get_split_model()
