@@ -134,11 +134,13 @@ class InternalDebtItem(accounting_base.BaseDebtRecord,
         elif self.activity_participation is not None:
             base = str(self.activity_participation.activity)
             if self.activity_participation.participant_count > 1:
-                base += '%s [%s]' % (
+                return '%s [%s]' % (
                     base, pgettext_lazy('registrant count', '%(count)d p') % {
                         'count': self.activity_participation.participant_count
                     }
                 )
+            else:
+                return base
         else:
             return ''
 
