@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     'BulkPaymentUploadForm', 'BulkDebtUploadForm',
-    'ProfileAddDebtForm', 'InternalPaymentSplitFormSet'
+    'ProfileAddDebtForm', 'InternalPaymentSplitFormSet', 'IDIAdminForm'
 ]
 
 
@@ -738,3 +738,15 @@ def recompute_payment_splits(payments, debt_filter=None, **kwargs):
                     InternalPaymentSplit, **kwargs
                 )
         InternalPaymentSplit.objects.bulk_create(splits_to_create())
+
+
+class IDIAdminForm(ModelForm):
+    class Meta:
+        model = models.InternalDebtItem
+        fields = tuple()
+
+    def __init__(self, *args, instance=None, **kwargs):
+        super().__init__(*args, instance=instance, **kwargs)
+        if (instance is not None and 'comment' in self.fields
+            and instance.activity_participation_id is not None):
+            self.fields['comment'].required = False
