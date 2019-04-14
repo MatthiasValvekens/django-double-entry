@@ -1,19 +1,12 @@
 import re
-from collections import defaultdict
 from decimal import Decimal
 
 from django.http import HttpResponse
 from django.conf import settings
 from django.forms import ValidationError
-from django.utils import timezone
-from django.utils.translation import (
-    ugettext_lazy as _, activate, get_language,
-    pgettext,
-)
+from django.utils.translation import ugettext_lazy as _
 from djmoney.money import Money
 from moneyed import EUR
-
-from ..utils import _dt_fallback
 
 import logging
 logger = logging.getLogger(__name__)
@@ -21,8 +14,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'PAYMENT_NATURE_CASH', 'PAYMENT_NATURE_OTHER', 'PAYMENT_NATURE_TRANSFER',
     'OGM_RESERVATION_PREFIX', 'OGM_INTERNAL_DEBT_PREFIX',
-    'generate_qif', 'VALID_OGM_PREFIXES', 'OGM_REGEX', 'decimal_to_money',
-    'parse_ogm', 'valid_ogm',
+    'VALID_OGM_PREFIXES', 'OGM_REGEX',
+    'decimal_to_money', 'parse_ogm', 'valid_ogm',
     'ogm_from_prefix', 'check_payment_change_permissions', 'any_payment_access',
     'epc_qr_code_response'
 ]
@@ -131,119 +124,6 @@ def valid_ogm(ogm):
             code='invalid',
             params={'modulus': remainder}
         )
-
-def generate_qif(start, end, by_processed_ts=True):
-    from ..models import InternalPaymentSplit, FinancialGlobals
-    overpaid_category = pgettext('.qif export', 'OVERPAID')
-    overpaid_memo = pgettext('.qif export', 'ERROR: OVERPAID')
-    multiple_debts_memo = pgettext('.qif export', '[multiple debts]')
-    gsettings = FinancialGlobals.load()
-    old_lang = get_language()
-    activate(gsettings.gnucash_language)
-    categories_seen = set()
-
-    accounts = {
-        PAYMENT_NATURE_TRANSFER: (
-            gsettings.gnucash_checking_account_name, 'Bank'
-        ),
-        PAYMENT_NATURE_CASH: (
-            gsettings.gnucash_cash_account_name, 'Cash'
-        )
-    }
-
-    # This generates better SQL than prefetch_related
-    # on the InternalPayment table (gets all data in 1 query)
-    # TODO optimise by deferring unnecessary fields
-    # (probably requires something like django-seal to test properly)
-    ts_range = (
-        _dt_fallback(start), _dt_fallback(end, use_max=True)
-    )
-    if by_processed_ts:
-        qs = InternalPaymentSplit.objects.filter(
-            payment__processed__range=ts_range
-        )
-    else:
-        qs = InternalPaymentSplit.objects.filter(
-            payment__timestamp__range=ts_range
-        )
-    splits_to_process = qs.select_related(
-        'debt', 'payment', 'payment__member',
-        'debt__activity_participation__activity',
-        'debt__activity_participation__activity__gnucash_category'
-    )
-
-    payments_by_nature = defaultdict(list)
-    splits_by_payment = defaultdict(list)
-
-    for s in splits_to_process:
-        splits_by_payment[s.payment].append(s)
-
-    for p in splits_by_payment.keys():
-        payments_by_nature[p.nature].append(p)
-
-    def format_transaction(payment, splits):
-        yield 'D' + timezone.localdate(payment.timestamp).strftime('%d/%m/%y')
-        yield 'T' + str(payment.total_amount.amount)
-        yield 'M{last_name} {first_name}: {split_memos}'.format(
-            last_name=payment.member.last_name.upper(),
-            first_name=payment.member.first_name,
-            split_memos=(
-                multiple_debts_memo if len(splits) > 3 else
-                ', '.join(split.debt.gnucash_memo for split in splits)
-            )
-        )
-
-        total_amt = Decimal('0.00')
-        for split in splits:
-            debt = split.debt
-            gnucash_category = debt.gnucash_category_string
-            categories_seen.add(gnucash_category)
-            amt = split.amount.amount
-            total_amt += amt
-            yield 'S' + gnucash_category
-            yield 'E' + debt.gnucash_memo
-            yield '$' + str(amt)
-
-        # This should happen only rarely, but in any case
-        # the treasurer needs to know about it,
-        # so we add a split in the OVERPAID category
-        # (at least this should be more predicable and easier to document
-        # than explaining/figuring out how unbalanced transactions are handled
-        # in GnuCash on .qif imports)
-        remainder = payment.total_amount.amount - total_amt
-        if remainder > 0:
-            categories_seen.add(overpaid_category)
-            yield 'S' + overpaid_category
-            yield 'E' + overpaid_memo
-            yield '$' + str(remainder)
-
-        yield '^'
-        yield ''
-
-    def format_qif():
-        # declare categories
-        yield '!Type:Cat'
-        for category in categories_seen:
-            yield 'N' + category
-            yield 'I'
-            yield '^'
-            yield ''
-
-        # declare accounts + associated payments according to their natures
-        for nature, (account, transaction_type) in accounts.items():
-            yield '!Account'
-            yield 'N' + account
-            yield '^'
-            yield '!Type:' + transaction_type
-            for payment in payments_by_nature[nature]:
-                yield from format_transaction(
-                    payment, splits_by_payment[payment]
-                )
-
-    result = '\n'.join(format_qif())
-    activate(old_lang)
-    return result
-
 
 def epc_qr_code_response(*, transaction_amount: Money,
                          remittance_info, sepa_purpose):

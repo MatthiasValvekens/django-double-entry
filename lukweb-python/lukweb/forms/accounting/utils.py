@@ -98,9 +98,9 @@ class GetQifForm(forms.Form):
         start = self.cleaned_data['start']
         end = self.cleaned_data['end']
         by_processed_ts = self.cleaned_data['by_processed']
-        content = payments.generate_qif(
+        content = payments.InternalAccountsQifFormatter(
             start, end, by_processed_ts=by_processed_ts
-        )
+        ).generate()
         if by_processed_ts:
             fname_fmt = _('Payments imported %(start)s-%(end)s.qif')
         else:
