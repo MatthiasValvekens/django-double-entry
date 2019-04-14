@@ -3,6 +3,7 @@ import logging
 from decimal import Decimal
 from collections import defaultdict
 
+from django.db.models import Prefetch
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import pgettext, get_language, activate
@@ -13,7 +14,9 @@ from .. import models
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['InternalAccountsQifFormatter',]
+__all__ = ['InternalAccountsQifFormatter','TicketSalesQifFormatter']
+
+# TODO: make proper use of reflection methods from accounting.base
 
 class QifFormatter:
     overpaid_category = pgettext('.qif export', 'OVERPAID')
@@ -49,6 +52,12 @@ class QifFormatter:
         for payment, splits in splits_by_payment.items():
             yield from self.format_transaction(payment, splits)
 
+    def format_split_memo(self, split):
+        raise NotImplementedError
+
+    def split_category(self, split):
+        raise NotImplementedError
+
     def format_transaction(self, payment, splits):
         yield 'D' + timezone.localdate(payment.timestamp).strftime('%d/%m/%y')
         yield 'T' + str(payment.total_amount.amount)
@@ -56,18 +65,17 @@ class QifFormatter:
             transaction_party=self.format_transaction_party(payment),
             split_memos=(
                 self.multiple_debts_memo if len(splits) > 3 else
-                ', '.join(split.debt.gnucash_memo for split in splits)
+                ', '.join(self.format_split_memo(split) for split in splits)
             )
         )
 
         total_amt = Decimal('0.00')
         for split in splits:
-            debt = split.debt
-            gnucash_category = debt.gnucash_category_string
+            gnucash_category = self.split_category(split)
             if not gnucash_category:
                 logger.error(
                     "Could not find a gnucash category for payment; "
-                    "debt id is %d." % debt.pk
+                    "split id is %d." % split.pk
                 )
                 gnucash_category = "WEBSITE_ERROR"
 
@@ -75,7 +83,7 @@ class QifFormatter:
             amt = split.amount.amount
             total_amt += amt
             yield 'S' + gnucash_category
-            yield 'E' + debt.gnucash_memo
+            yield 'E' + self.format_split_memo(split)
             yield '$' + str(amt)
 
         # This should happen only rarely, but in any case
@@ -136,6 +144,12 @@ class QifFormatter:
 
 class InternalAccountsQifFormatter(QifFormatter):
 
+    def split_category(self, split):
+        return split.debt.gnucash_category_string
+
+    def format_split_memo(self, split):
+        return split.debt.gnucash_memo
+
     def format_transaction_party(self, payment):
         return '%s %s' % (
             payment.member.last_name.upper(), payment.member.first_name
@@ -161,4 +175,57 @@ class InternalAccountsQifFormatter(QifFormatter):
             'debt', 'payment', 'payment__member',
             'debt__activity_participation__activity',
             'debt__activity_participation__activity__gnucash_category'
+        )
+
+
+class TicketSalesQifFormatter(QifFormatter):
+
+    def split_category(self, split):
+        r: models.ReservationDebt = split.reservation
+        try:
+            r = r.reservation
+        except models.Reservation.DoesNotExist:
+            pass
+        return r.gnucash_category_string
+
+    def format_split_memo(self, split):
+        r: models.ReservationDebt = split.reservation
+        try:
+            r = r.reservation
+        except models.Reservation.DoesNotExist:
+            pass
+        return r.gnucash_memo
+
+    def format_transaction_party(self, payment):
+        return payment.customer.name
+
+    @property
+    def accounts(self):
+        return {
+            models.PAYMENT_METHOD_PREPAID: (
+                self.fin_globals.gnucash_checking_account_name, 'Bank'
+            ),
+            models.PAYMENT_METHOD_ONSITE_CASH: (
+                self.fin_globals.gnucash_cash_account_name, 'Cash'
+            )
+        }
+
+    def account_key(self, payment):
+        return payment.method
+
+    @property
+    def base_split_qs(self):
+        reservation_qs = models.Reservation.objects.prefetch_related(
+            Prefetch(
+                'tickets',
+                queryset=models.Ticket.objects.select_related('category')
+            )
+        ).select_related('event', 'event__ticket_sales_gnucash_category')
+        reservation_debt_qs = models.ReservationDebt.objects.prefetch_related(
+            Prefetch('reservation', queryset=reservation_qs)
+        )
+        return models.ReservationPaymentSplit.objects.select_related(
+            'payment', 'payment__customer',
+        ).prefetch_related(
+            Prefetch('reservation', queryset=reservation_debt_qs)
         )

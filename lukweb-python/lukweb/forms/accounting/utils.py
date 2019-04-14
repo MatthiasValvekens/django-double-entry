@@ -16,8 +16,10 @@ __all__ = ['GnuCashFieldMixin', 'GetQifForm']
 
 class GnuCashFieldMixin(ModelForm):
     require_gnucash = True
+
+    gnucash_field_name = 'gnucash_category'
+
     gnucash = forms.CharField(
-        label=_('GnuCash category'),
         widget=DatalistInputWidget(
             choices=models.GnuCashCategory.objects.all
         )
@@ -25,12 +27,16 @@ class GnuCashFieldMixin(ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        gnucash_field = self._meta.model._meta.get_field('gnucash_category')
+        gnucash_field = self._meta.model._meta.get_field(
+            self.gnucash_field_name
+        )
+        self.fields['gnucash'].label = gnucash_field.verbose_name
         self.fields['gnucash'].help_text = gnucash_field.help_text
         self.fields['gnucash'].required = self.require_gnucash
         instance = kwargs.get('instance')
-        if instance is not None and instance.gnucash_category is not None:
-            self.fields['gnucash'].initial = instance.gnucash_category.name
+        existing_gc = getattr(instance, self.gnucash_field_name, None)
+        if instance is not None and existing_gc is not None:
+            self.fields['gnucash'].initial = existing_gc.name
 
     def _save(self, commit=True, set_category=True):
         instance = super(GnuCashFieldMixin, self).save(commit=False)
@@ -38,13 +44,15 @@ class GnuCashFieldMixin(ModelForm):
             # this potentially writes to the db, so we don't want this
             # as a clean_field method
             gnucash_raw = self.cleaned_data['gnucash']
-            instance.gnucash_category = models.GnuCashCategory.get_category(
-                gnucash_raw.strip()
-            )
+            gc = models.GnuCashCategory.get_category(gnucash_raw.strip())
+            setattr(instance, self.gnucash_field_name, gc)
             if commit:
                 instance.save()
         return instance
 
+
+QUERY_INTERNAL_ACCOUNTS = 1
+QUERY_TICKET_SALES_ACCOUNTS = 2
 
 class GetQifForm(forms.Form):
     
@@ -69,6 +77,16 @@ class GetQifForm(forms.Form):
             'payment timestamp.'
         ),
         required=False
+    )
+
+    ledger = forms.ChoiceField(
+        choices=(
+            (QUERY_INTERNAL_ACCOUNTS, _('Internal debts')),
+            (QUERY_TICKET_SALES_ACCOUNTS, _('Ticket sales'))
+        ),
+        widget=forms.RadioSelect,
+        required=True,
+        initial=QUERY_INTERNAL_ACCOUNTS
     )
 
     def __init__(self, *args, **kwargs):
@@ -98,7 +116,12 @@ class GetQifForm(forms.Form):
         start = self.cleaned_data['start']
         end = self.cleaned_data['end']
         by_processed_ts = self.cleaned_data['by_processed']
-        content = payments.InternalAccountsQifFormatter(
+        ledger = int(self.cleaned_data['ledger'])
+        if ledger == QUERY_TICKET_SALES_ACCOUNTS:
+            qif_formatter = payments.TicketSalesQifFormatter
+        else:
+            qif_formatter = payments.InternalAccountsQifFormatter
+        content = qif_formatter(
             start, end, by_processed_ts=by_processed_ts
         ).generate()
         if by_processed_ts:
@@ -110,8 +133,13 @@ class GetQifForm(forms.Form):
             'end': end.strftime('%Y%m%d')
         }
         g = models.FinancialGlobals.load()
-        g.last_payment_export_start = start
-        g.last_payment_export_end = end
-        g.last_payment_export_byprocessed = by_processed_ts
+        if ledger == QUERY_TICKET_SALES_ACCOUNTS:
+            g.last_ticket_payment_export_start = start
+            g.last_ticket_payment_export_end = end
+            g.last_ticket_payment_export_byprocessed = by_processed_ts
+        else:
+            g.last_payment_export_start = start
+            g.last_payment_export_end = end
+            g.last_payment_export_byprocessed = by_processed_ts
         g.save()
         return filename, content
