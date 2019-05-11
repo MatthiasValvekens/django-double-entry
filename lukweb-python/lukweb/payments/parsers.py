@@ -27,11 +27,15 @@ class FinancialCSVParser:
     date_column_name= 'datum'
 
     class TransactionInfo:
+        dt_fallback_with_max = True
+
         def __init__(self, *, line_no, amount, timestamp, account_lookup_str):
             self.ledger_entry = None
             self.line_no = line_no
             self.amount = amount
-            self.timestamp = _dt_fallback(timestamp)
+            self.timestamp = _dt_fallback(
+                timestamp, use_max=self.dt_fallback_with_max
+            )
             self.account_lookup_str = account_lookup_str
 
     def __init__(self, csv_file):
@@ -187,6 +191,8 @@ class DebtCSVParser(MemberTransactionParser):
     activity_column_name = 'activiteit'
 
     class TransactionInfo(MemberTransactionParser.TransactionInfo):
+        dt_fallback_with_max = False
+
         def __init__(self, *, comment, gnucash, filter_slug, activity_id=None,
                      **kwargs):
             super().__init__(**kwargs)
