@@ -113,18 +113,16 @@ class InternalDebtItem(accounting_base.BaseDebtRecord,
         return self.total_amount
 
         
-    @cached_property
+    @property
     def gnucash_category_string(self):
         if self.gnucash_category is not None:
-            return_value = self.gnucash_category.name
+            return self.gnucash_category.name
         elif self.activity_participation is not None:
             # gnucash_category_string is never None
-            return_value = self.activity_participation. \
+            return self.activity_participation. \
                 activity.gnucash_category_string
         else:
-            logger.error("Could not find a gnucash category for payment")
-            return_value = "WEBSITE_ERROR"
-        return return_value
+            return None
 
     def get_comment_display(self):
         if self.comment:
@@ -149,7 +147,7 @@ class InternalDebtItem(accounting_base.BaseDebtRecord,
         return_val = self.get_comment_display()
         if not return_val:
             logger.error(
-                "Could not find a memo name for payment with id %s." % (
+                "Could not find a memo name for debt with id %s." % (
                     self.pk
                 )
             )
