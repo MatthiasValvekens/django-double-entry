@@ -1,6 +1,7 @@
 import logging
 import re
-from typing import Optional
+from collections import namedtuple
+from typing import Optional, List
 
 from django.conf import settings
 from django.db import models
@@ -13,11 +14,13 @@ from .base import nonzero_money_validator, GnuCashCategory
 logger = logging.getLogger(__name__)
 
 __all__ =[
-    'ActivityOption', 'PricingModel', 'PricingRule'
+    'ActivityOption',  'ActivityOptionRegistry',
+    'PricingModel', 'PricingRule',
 ]
 
 # TODO: //member/... rules
 #  (//member/active //member/inactive, //member/<pk>, etc.)
+# TODO: handle multiplicities?
 
 # //pk/slug1/slug2/...
 # pk's must refer to activities sharing the same payment formula
@@ -195,6 +198,10 @@ class PricingModel(models.Model):
         verbose_name_plural = _('pricing models')
 
 
+PricingData = namedtuple('PricingData', [
+        'price', 'comment', 'filter_slug'
+    ]
+)
 
 class PricingRule(models.Model):
 
@@ -288,10 +295,37 @@ class PricingRule(models.Model):
             option_list = [
                 handle_option(line_no, option) for option in options_to_parse
             ]
-            return option_list, price, comment, filter_slug
+            return option_list, PricingData(
+                price=price, comment=comment, filter_slug=filter_slug
+            )
 
         self._matching_rules = [handle_line(*t) for t in enumerate(spec_lines)]
         self._relevant_activities = _relevant_activities
+
+    @property
+    def relevant_activity_pks(self):
+        if self._relevant_activities is None:
+            raise ValueError('Pricing rule has not been processed yet')
+        return self._relevant_activities
+
+
+    def opts_match(self, opts: List[ActivityOption]) -> PricingData:
+        if self._matching_rules is None:
+            raise ValueError('Pricing rule has not been processed yet')
+
+        def is_matched(criterium):
+            return any(opt in criterium for opt in opts)
+
+        for criteria, pricing_data in self._matching_rules:
+            # a rule matches if *all* its criteria are satisfied
+            if all(is_matched(cr) for cr in criteria):
+                return pricing_data
+
+        return PricingData(
+            price=self.no_match_default, comment=self.description,
+            filter_slug=self.default_filter_slug
+        )
+
 
     class Meta:
         verbose_name = _('pricing rule')
