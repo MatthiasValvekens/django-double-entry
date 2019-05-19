@@ -25,11 +25,13 @@ ROOTED_ACTIVITY_OPTION_PATH_PATTERN = re.compile(
     r'^(//(?P<act_ref>(\d+|self)))?(?P<comps>(/[-a-zA-Z0-9]+)+)$'
 )
 
-# [opt1, opt2, opt3] -> price "comment" (optional)
+# [opt1, opt2, opt3] -> price "comment" <slug>
+# comment/slug are optional
 PRICING_RULE_CASE_PATTERN = re.compile(
     r'\[(?P<match_options>[-/,a-zA-Z0-9\s]*)\]\s*->\s*'
-    r'(?P<price>(\d\d?)([,.]\d\d?)?)\s+'
-    r'(\"(?P<comment>.*?)\")?'
+    r'(?P<price>(\d\d?)([,.]\d\d?)?)\s*'
+    r'(\s\"(?P<comment>.*?)\")?\s*'
+    r'(\s<(?P<filter_slug>[_-a-zA-Z0-9])>)?'
 )
 
 # pricing rules can then be considered as functions of sets of
@@ -213,6 +215,16 @@ class PricingRule(models.Model):
         )
     )
 
+    default_filter_slug = models.SlugField(
+        verbose_name=_('default filter slug'),
+        help_text=_(
+            'Default filter slug to assign to debts associated with this '
+            'pricing rule.'
+        ),
+        null=True,
+        blank=True
+    )
+
     gnucash_category = models.ForeignKey(
         GnuCashCategory,
         verbose_name=_('GnuCash category'),
@@ -271,11 +283,12 @@ class PricingRule(models.Model):
                 options_to_parse = option_list_str.split(',')
             price = Decimal(m.group('price'))
             comment = m.group('comment') or self.description
+            filter_slug = m.group('filter_slug') or self.default_filter_slug
 
             option_list = [
                 handle_option(line_no, option) for option in options_to_parse
             ]
-            return option_list, price, comment
+            return option_list, price, comment, filter_slug
 
         self._matching_rules = [handle_line(*t) for t in enumerate(spec_lines)]
         self._relevant_activities = _relevant_activities
