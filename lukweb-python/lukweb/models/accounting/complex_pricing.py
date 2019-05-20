@@ -7,7 +7,9 @@ from django.conf import settings
 from django.db import models
 from djmoney.forms import MoneyField
 from moneyed import Money, Decimal
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import (
+    ugettext_lazy as _, pgettext_lazy
+)
 
 from .base import nonzero_money_validator, GnuCashCategory
 
@@ -193,6 +195,26 @@ class PricingModel(models.Model):
         verbose_name=_('name'),
     )
 
+    enabled = models.BooleanField(
+        verbose_name=_('pricing model enabled'),
+        default=False,
+        help_text=_(
+            'While this flag is switched off, registrations for all activities '
+            'using this pricing model will be disabled. It will still be '
+            'available for selection in the admin interface in the meantime.'
+        )
+    )
+
+    persist_active = models.BooleanField(
+        verbose_name=_('persist \"active\" check'),
+        default=False,
+        help_text=_(
+            'Treat all registrants of a registration from an active member '
+            'as active. For pricing purposes, this is usually not what you '
+            'want, but we leave in the option anyway.'
+        )
+    )
+
     class Meta:
         verbose_name = _('pricing model')
         verbose_name_plural = _('pricing models')
@@ -204,6 +226,30 @@ PricingData = namedtuple('PricingData', [
 )
 
 class PricingRule(models.Model):
+    SCOPE_ACTIVE_ONLY = 1
+    SCOPE_INACTIVE_ONLY = 2
+    SCOPE_ALL_MEMBERS = 3
+
+    SCOPE_CHOICES = (
+        (
+            SCOPE_ACTIVE_ONLY,
+            pgettext_lazy(
+                'activity target audience', 'Active members only'
+            )
+        ),
+        (
+            SCOPE_INACTIVE_ONLY,
+            pgettext_lazy(
+                'activity target audience', 'Inactive members only'
+            )
+        ),
+        (
+            SCOPE_ALL_MEMBERS,
+            pgettext_lazy(
+                'activity target audience', 'All members'
+            )
+        ),
+    )
 
     pricing_model = models.ForeignKey(
         PricingModel,
@@ -249,6 +295,7 @@ class PricingRule(models.Model):
         default=Money(0, settings.BOOKKEEPING_CURRENCY)
     )
 
+    # TODO: user-friendly validator for this field
     specification = models.TextField(
         null=False,
         blank=True,
@@ -257,6 +304,26 @@ class PricingRule(models.Model):
             'Specify pricing rules for this item. '
             'Please refer to the manual for details.'
         )
+    )
+
+    scope = models.PositiveSmallIntegerField(
+        verbose_name=_('Rule scope'),
+        help_text=_(
+            'Members to which this payment rule applies'
+        ),
+        choices=SCOPE_CHOICES,
+        default=SCOPE_ALL_MEMBERS
+    )
+
+    count_multiple = models.BooleanField(
+        verbose_name=_('Count with multiplicity'),
+        help_text=_(
+            'If unchecked, this rule will only be triggered once per '
+            'registration. If checked, it will be applied to all additional '
+            'registrant in accordance with the multiple registration pricing '
+            'principles set out in the manual.'
+        ),
+        default=True
     )
 
     _relevant_activities = None
