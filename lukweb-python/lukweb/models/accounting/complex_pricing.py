@@ -1,7 +1,7 @@
 import logging
 import re
 from collections import namedtuple
-from typing import Optional, List
+from typing import Optional, Iterable
 
 from django.conf import settings
 from django.db import models
@@ -16,8 +16,7 @@ from .base import nonzero_money_validator, GnuCashCategory
 logger = logging.getLogger(__name__)
 
 __all__ =[
-    'ActivityOption',  'ActivityOptionRegistry',
-    'PricingModel', 'PricingRule',
+    'ActivityOption', 'PricingModel', 'PricingRule'
 ]
 
 # TODO: //member/... rules
@@ -376,7 +375,7 @@ class PricingRule(models.Model):
         return self._relevant_activities
 
 
-    def opts_match(self, opts: List[ActivityOption]) -> PricingData:
+    def opts_match(self, opts: Iterable[ActivityOption]) -> PricingData:
         if self._matching_rules is None:
             raise ValueError('Pricing rule has not been processed yet')
 
