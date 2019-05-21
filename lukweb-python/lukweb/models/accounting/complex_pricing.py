@@ -4,6 +4,7 @@ from collections import namedtuple
 from typing import Optional, Iterable
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from djmoney.forms import MoneyField
 from moneyed import Money, Decimal
@@ -33,7 +34,7 @@ ROOTED_ACTIVITY_OPTION_PATH_PATTERN = re.compile(
 # comment/slug are optional
 PRICING_RULE_CASE_PATTERN = re.compile(
     r'\[(?P<match_options>[-/,a-zA-Z0-9\s]*)\]\s*->\s*'
-    r'(?P<price>(\d\d?)([,.]\d\d?)?)\s*'
+    r'(?P<price>\d\d?([,.]\d\d?)?)\s*'
     r'(\s\"(?P<comment>.*?)\")?\s*'
     r'(\s<(?P<filter_slug>[_-a-zA-Z0-9])>)?'
 )
@@ -224,6 +225,75 @@ PricingData = namedtuple('PricingData', [
     ]
 )
 
+def validate_pricing_spec(spec: str):
+    lines = spec.splitlines()
+    no_match = []
+    illegal_option_format = []
+    relative_reference_encountered = None
+    absolute_reference_encountered = None
+
+    def line_valid(line_no, line):
+        nonlocal relative_reference_encountered, absolute_reference_encountered
+        line = line.strip()
+        if not line:
+            return
+        line_no += 1
+        m = PRICING_RULE_CASE_PATTERN.match(line)
+        if not m:
+            no_match.append(line_no)
+            return
+        option_str = m.group('match_options')
+        if not option_str:
+            return
+
+        options = (opt.strip() for opt in option_str.split(','))
+        for opt in options:
+            opt_match = ROOTED_ACTIVITY_OPTION_PATH_PATTERN.match(opt)
+            if not opt_match:
+                illegal_option_format.append(
+                    _('Illegal option at line %(line_no)d: \'%(opt)s\'') % {
+                        'line_no': line_no, 'opt': opt
+                    }
+                )
+            act_ref = opt_match.group('act_ref')
+            if act_ref is None or act_ref == 'self':
+                relative_reference_encountered = (
+                    relative_reference_encountered or opt
+                )
+            else:
+                absolute_reference_encountered = (
+                    absolute_reference_encountered or opt
+                )
+
+    for l in enumerate(lines):
+        line_valid(*l)
+
+    if no_match:
+        raise ValidationError(
+            _(
+                'Line(s) %(line_nos)s contain(s) invalid matching rule '
+                'declaration.'
+            ) % {
+                'line_nos': ', '.join(str(l) for l in no_match)
+            }
+        )
+
+    if illegal_option_format:
+        raise ValidationError(illegal_option_format)
+
+    if relative_reference_encountered and absolute_reference_encountered:
+        raise ValidationError(
+            _(
+                'You used both absolute (e.g. %(abs)s) and relative '
+                '(e.g. %(rel)s) references to activity options in this '
+                'pricing rule specification. This will almost certainly not '
+                'have the effect you expect it to have. Please reconsider.'
+            ) % {
+                'abs': absolute_reference_encountered,
+                'rel': relative_reference_encountered
+            }
+        )
+
 class PricingRule(models.Model):
     SCOPE_ACTIVE_ONLY = 1
     SCOPE_INACTIVE_ONLY = 2
@@ -294,11 +364,11 @@ class PricingRule(models.Model):
         default=Money(0, settings.BOOKKEEPING_CURRENCY)
     )
 
-    # TODO: user-friendly validator for this field
     specification = models.TextField(
         null=False,
         blank=True,
         verbose_name=_('Specification'),
+        validators=[validate_pricing_spec,],
         help_text=_(
             'Specify pricing rules for this item. '
             'Please refer to the manual for details.'
@@ -333,6 +403,7 @@ class PricingRule(models.Model):
         _relevant_activities = set()
 
         def handle_option(line_no, option):
+            option = option.strip()
             try:
                 res = registry.ensure_registered(option)
             except ValueError:
@@ -354,7 +425,7 @@ class PricingRule(models.Model):
                 options_to_parse = []
             else:
                 options_to_parse = option_list_str.split(',')
-            price = Decimal(m.group('price'))
+            price = Decimal(m.group('price').replace(',','.'))
             comment = m.group('comment') or self.description
             filter_slug = m.group('filter_slug') or self.default_filter_slug
 
