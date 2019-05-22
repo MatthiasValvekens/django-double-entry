@@ -7,7 +7,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from djmoney.models.fields import MoneyField
-from moneyed import Money
+from moneyed import Money, Decimal
 from django.utils.translation import (
     ugettext_lazy as _, pgettext_lazy
 )
@@ -114,23 +114,39 @@ class ActivityOption:
 
 class ActivityOptionRegistry:
 
-    def __init__(self, focus: models.Model=None):
+    def __init__(self, focus: models.Model=None, focus_pk=None):
         self.seen = {}
-        self.focus_pk = None if focus is None else focus.pk
+        if focus_pk is not None:
+            self.focus_pk = focus_pk
+        else:
+            self.focus_pk = None if focus is None else focus.pk
+
+    @staticmethod
+    def split_item_spec(item):
+        m = ROOTED_ACTIVITY_OPTION_PATH_PATTERN.match(item)
+        if m is None:
+            raise ValueError
+        ref_str = m.group('act_ref')
+        if ref_str is not None and ref_str != 'self':
+            act_ref = int(ref_str)
+        else:
+            act_ref = None
+        path = m.group('comps')
+        return path, act_ref
 
     # general idea: the GUI thread initialises this by parsing option
     # declarations as UIActivityOption objects, while the payment processors
     # don't have to care about GUI stuff, so they can just work with base
     # ActivityOption objects
-    def register(self, path, constructor=None, act_ref=None):
-        if path and path != '/':
+    def register_path(self, path, *, act_ref, constructor=None):
+        if path:
             cutoff = path.rfind('/')
             # shouldn't happen, since paths should start with /
             # but you never know
             if cutoff == -1:
                 raise ValueError
             parent_path, path_base = path[:cutoff], path[cutoff + 1:]
-            parent = self.ensure_registered(
+            parent = self.ensure_registered_path(
                 parent_path, constructor=constructor, act_ref=act_ref
             )
         else:
@@ -140,28 +156,41 @@ class ActivityOptionRegistry:
         constructor = constructor or ActivityOption
         opt = constructor(
             slug=path_base, parent=parent, bound=act_ref is not None,
-            act_pk=self.focus_pk
+            act_pk=act_ref or self.focus_pk
         )
         if parent is not None:
             parent._children.append(opt)
         self.seen[(path, act_ref)] = opt
         return opt
 
-    def ensure_registered(self, path, constructor=None, act_ref=None):
+    def register(self, item, constructor=None):
+        path, act_ref = ActivityOptionRegistry.split_item_spec(item)
+        return self.register_path(
+            path, act_ref=act_ref, constructor=constructor
+        )
+
+    def ensure_registered_path(self, path, *, act_ref, constructor=None):
         try:
             return self.seen[(path, act_ref)]
         except KeyError:
-            return self.register(path, constructor=constructor, act_ref=act_ref)
+            return self.register_path(
+                path, constructor=constructor, act_ref=act_ref
+            )
+
+
+    def ensure_registered(self, item, constructor=None):
+        path, act_ref = ActivityOptionRegistry.split_item_spec(item)
+        try:
+            return self.seen[(path, act_ref)]
+        except KeyError:
+            return self.register_path(
+                path, constructor=constructor, act_ref=act_ref
+            )
 
     def __getitem__(self, item):
-        m = ROOTED_ACTIVITY_OPTION_PATH_PATTERN.match(item)
-        if m is None:
-            raise ValueError
-        act_ref = m.group('act_ref')
+        path, act_ref = ActivityOptionRegistry.split_item_spec(item)
         if act_ref is None:
             act_ref = self.focus_pk
-        act_ref = int(act_ref) if act_ref != 'self' else self.focus_pk
-        path = m.group('comps')
         try:
             return self.seen[(path, act_ref)]
         except KeyError:
