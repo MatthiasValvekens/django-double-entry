@@ -163,8 +163,9 @@ class ActivityOptionRegistry:
         self.seen[(path, act_ref)] = opt
         return opt
 
-    def register(self, item, constructor=None):
+    def register(self, item, constructor=None, default_act_ref=None):
         path, act_ref = ActivityOptionRegistry.split_item_spec(item)
+        act_ref = act_ref or default_act_ref
         return self.register_path(
             path, act_ref=act_ref, constructor=constructor
         )
@@ -178,8 +179,9 @@ class ActivityOptionRegistry:
             )
 
 
-    def ensure_registered(self, item, constructor=None):
+    def ensure_registered(self, item, constructor=None, default_act_ref=None):
         path, act_ref = ActivityOptionRegistry.split_item_spec(item)
+        act_ref = act_ref or default_act_ref
         try:
             return self.seen[(path, act_ref)]
         except KeyError:
