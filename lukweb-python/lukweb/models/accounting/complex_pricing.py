@@ -12,7 +12,7 @@ from django.utils.translation import (
     ugettext_lazy as _, pgettext_lazy
 )
 
-from .base import nonzero_money_validator, GnuCashCategory
+from .base import GnuCashCategory
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ __all__ =[
 # //pk/slug1/slug2/...
 # pk's must refer to activities sharing the same payment formula
 ROOTED_ACTIVITY_OPTION_PATH_PATTERN = re.compile(
-    r'^(//(?P<act_ref>(\d+|self)))?(?P<comps>(/[-a-zA-Z0-9]+)+)$'
+    r'^(//(?P<act_ref>(\d+|self)))?(?P<comps>(/[-a-zA-Z0-9]+)*)/?$'
 )
 
 # [opt1, opt2, opt3] -> price "comment" <slug>
@@ -219,6 +219,9 @@ class PricingModel(models.Model):
         verbose_name = _('pricing model')
         verbose_name_plural = _('pricing models')
 
+    def __str__(self):
+        return self.name
+
 
 PricingData = namedtuple('PricingData', [
         'price', 'comment', 'filter_slug'
@@ -255,6 +258,7 @@ def validate_pricing_spec(spec: str):
                         'line_no': line_no, 'opt': opt
                     }
                 )
+                continue
             act_ref = opt_match.group('act_ref')
             if act_ref is None or act_ref == 'self':
                 relative_reference_encountered = (
@@ -360,7 +364,6 @@ class PricingRule(models.Model):
         decimal_places=2,
         max_digits=6,
         default_currency=settings.BOOKKEEPING_CURRENCY,
-        validators=[nonzero_money_validator],
         default=Money(0, settings.BOOKKEEPING_CURRENCY)
     )
 
@@ -467,3 +470,6 @@ class PricingRule(models.Model):
     class Meta:
         verbose_name = _('pricing rule')
         verbose_name_plural = _('pricing rules')
+
+    def __str__(self):
+        return self.description
