@@ -467,7 +467,8 @@ class PricingRule(models.Model):
                 handle_option(line_no, option) for option in options_to_parse
             ]
             return option_list, PricingData(
-                price=price, comment=comment, filter_slug=filter_slug
+                price=Money(price, settings.BOOKKEEPING_CURRENCY),
+                comment=comment, filter_slug=filter_slug
             )
 
         self._matching_rules = [handle_line(*t) for t in enumerate(spec_lines)]
