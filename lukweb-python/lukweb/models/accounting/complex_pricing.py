@@ -385,9 +385,7 @@ class PricingRule(models.Model):
     gnucash_category = models.ForeignKey(
         GnuCashCategory,
         verbose_name=_('GnuCash category'),
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True
+        on_delete=models.PROTECT
     )
 
     no_match_default = MoneyField(
