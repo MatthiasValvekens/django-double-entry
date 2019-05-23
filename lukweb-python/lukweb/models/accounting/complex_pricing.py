@@ -88,7 +88,7 @@ class ActivityOption:
     def __contains__(self, item):
         if not isinstance(item, ActivityOption):
             return False
-        return self == item.parent or item.parent in self
+        return self == item or item.parent in self
 
     def __eq__(self, other):
         if not isinstance(other, ActivityOption):
