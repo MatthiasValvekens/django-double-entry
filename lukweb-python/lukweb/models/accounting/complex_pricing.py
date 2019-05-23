@@ -34,8 +34,8 @@ ROOTED_ACTIVITY_OPTION_PATH_PATTERN = re.compile(
 # comment/slug are optional
 PRICING_RULE_CASE_PATTERN = re.compile(
     r'\[(?P<match_options>[-/,a-zA-Z0-9\s]*)\]\s*->\s*'
-    r'(?P<price>\d\d?([,.]\d\d?)?)\s*'
-    r'(\s\"(?P<comment>.*?)\")?\s*'
+    r'(?P<price>\d\d?([,.]\d\d?)?)\s*?'
+    r'(\s\"(?P<comment>.+?)\")?\s*?'
     r'(\s<(?P<filter_slug>[_-a-zA-Z0-9])>)?'
 )
 
