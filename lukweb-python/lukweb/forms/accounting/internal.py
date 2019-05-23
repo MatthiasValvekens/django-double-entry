@@ -6,7 +6,7 @@ from itertools import chain
 from typing import Tuple, Iterable
 
 from django import forms
-from django.core.exceptions import SuspiciousOperation
+from django.core.exceptions import SuspiciousOperation, ValidationError
 from django.forms.models import ModelForm, modelformset_factory
 from django.shortcuts import render
 from django.utils.translation import (
@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     'BulkPaymentUploadForm', 'BulkDebtUploadForm',
-    'ProfileAddDebtForm', 'InternalPaymentSplitFormSet', 'IDIAdminForm'
+    'ProfileAddDebtForm', 'InternalPaymentSplitFormSet', 'IDIAdminForm',
+    'PricingRuleAdminForm'
 ]
 
 
@@ -750,3 +751,32 @@ class IDIAdminForm(ModelForm):
         if (instance is not None and 'comment' in self.fields
             and instance.activity_participation_id is not None):
             self.fields['comment'].required = False
+
+
+class PricingRuleAdminForm(ModelForm):
+    class Meta:
+        model = models.PricingRule
+        exclude = tuple()
+
+    def clean_specification(self):
+        specification = self.cleaned_data['specification']
+        from ...models.accounting.complex_pricing import ActivityOptionRegistry
+        registry = ActivityOptionRegistry()
+        self.instance.specification = specification  # a little hackish, maybe
+        self.instance._parse_specification(registry)
+        activities = self.instance.relevant_activity_pks
+        if not activities:
+            return
+        referenced_pricing_models = frozenset(
+            models.ChoirActivity.objects.filter(
+                pk__in=activities
+            ).values_list('pricing_model_id', flat=True)
+        )
+        if referenced_pricing_models != {self.instance.pricing_model_id}:
+            raise ValidationError(
+                _(
+                    'Please ensure that all activities referenced have '
+                    'the correct pricing model set'
+                )
+            )
+        return specification
