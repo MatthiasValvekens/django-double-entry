@@ -9,6 +9,7 @@ from django import forms
 from django.core.exceptions import SuspiciousOperation, ValidationError
 from django.forms.models import ModelForm, modelformset_factory
 from django.shortcuts import render
+from django.urls import reverse_lazy
 from django.utils.translation import (
     ugettext_lazy as _, ugettext
 )
@@ -25,7 +26,7 @@ from ...payments import (DebtCSVParser, MiscDebtPaymentCSVParser)
 from .utils import GnuCashFieldMixin
 from ... import models
 from ...widgets import (
-    DatalistInputWidget, MoneyWidget,
+    DatalistInputWidget, MoneyWidget, AjaxDatalistInputWidget,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     'BulkPaymentUploadForm', 'BulkDebtUploadForm',
     'ProfileAddDebtForm', 'InternalPaymentSplitFormSet', 'IDIAdminForm',
-    'PricingRuleAdminForm'
+    'PricingRuleAdminForm', 'PricingExceptionAdminForm'
 ]
 
 
@@ -780,3 +781,13 @@ class PricingRuleAdminForm(ModelForm):
                 )
             )
         return specification
+
+class PricingExceptionAdminForm(ModelForm):
+    class Meta:
+        model = models.PricingException
+        exclude = tuple()
+        widgets = {
+            'member': AjaxDatalistInputWidget(
+                endpoint=reverse_lazy('member_autocomplete')
+            )
+        }
