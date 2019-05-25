@@ -526,7 +526,7 @@ class PricingException(models.Model):
         verbose_name=_('force active/inactive'),
         help_text=_(
             'If true (resp. false), always treat this member as active '
-            '(resp. inactive) for the purpose of this pricing model. '
+            '(resp. inactive) for the purposes of this pricing model.'
         )
     )
 
