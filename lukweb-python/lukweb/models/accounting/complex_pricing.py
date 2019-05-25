@@ -12,17 +12,17 @@ from django.utils.translation import (
     ugettext_lazy as _, pgettext_lazy
 )
 
+from lukweb.fields import ChoirMemberField
 from .base import GnuCashCategory
 
 logger = logging.getLogger(__name__)
 
 __all__ =[
-    'ActivityOption', 'PricingModel', 'PricingRule'
+    'ActivityOption', 'PricingModel', 'PricingRule', 'PricingException'
 ]
 
-# TODO: //member/... rules
-#  (//member/active //member/inactive, //member/<pk>, etc.)
-# TODO: handle multiplicities?
+# TODO: handle multiplicities? Not obvious what the correct behaviour for this
+#  would be.
 
 # //pk/slug1/slug2/...
 # pk's must refer to activities sharing the same payment formula
@@ -329,6 +329,7 @@ def validate_pricing_spec(spec: str):
             }
         )
 
+
 class PricingRule(models.Model):
     SCOPE_ACTIVE_ONLY = 1
     SCOPE_INACTIVE_ONLY = 2
@@ -503,3 +504,33 @@ class PricingRule(models.Model):
 
     def __str__(self):
         return self.description
+
+
+class PricingException(models.Model):
+
+    member = ChoirMemberField(
+        on_delete=models.PROTECT,
+        verbose_name=_('involved member'),
+        require_active=False,
+        related_name='pricing_exceptions'
+    )
+
+    pricing_model = models.ForeignKey(
+        to=PricingModel,
+        on_delete=models.CASCADE,
+        verbose_name=_('pricing model'),
+        related_name='pricing_exceptions'
+    )
+
+    force_active = models.BooleanField(
+        verbose_name=_('force active/inactive'),
+        help_text=_(
+            'If true (resp. false), always treat this member as active '
+            '(resp. inactive) for the purpose of this pricing model. '
+        )
+    )
+
+    class Meta:
+        verbose_name = _('pricing exception')
+        verbose_name_plural = _('pricing exceptions')
+        unique_together = ('member', 'pricing_model')
