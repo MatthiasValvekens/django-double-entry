@@ -15,7 +15,7 @@ from django.utils.translation import (
     ugettext_lazy as _, pgettext_lazy, ugettext
 )
 
-from . import base as accounting_base
+from . import base as accounting_base, complex_pricing
 from ... import payments
 from ...fields import (
     ChoirMemberField
@@ -73,6 +73,13 @@ class InternalDebtItem(accounting_base.BaseDebtRecord,
         null=True
     )
 
+    pricing_rule = models.ForeignKey(
+        complex_pricing.PricingRule,
+        on_delete=models.SET_NULL,
+        editable=False,
+        null=True
+    )
+
     filter_slug = models.SlugField(
         verbose_name=_('filter code'),
         help_text=_('Filter code for use in targeted payment processing'),
@@ -97,6 +104,7 @@ class InternalDebtItem(accounting_base.BaseDebtRecord,
             Index(fields=['member', 'filter_slug']),
             Index(fields=['filter_slug'])
         )
+        unique_together = ('activity_participation', 'pricing_rule')
 
     def clean(self):
         if not self.filter_slug:
@@ -130,7 +138,15 @@ class InternalDebtItem(accounting_base.BaseDebtRecord,
         elif self.is_refund:
             return ugettext('<refund/unmanaged debt>')
         elif self.activity_participation is not None:
-            return str(self.activity_participation.activity)
+            base = str(self.activity_participation.activity)
+            if self.activity_participation.participant_count > 1:
+                return '%s [%s]' % (
+                    base, pgettext_lazy('registrant count', '%(count)d p') % {
+                        'count': self.activity_participation.participant_count
+                    }
+                )
+            else:
+                return base
         else:
             return ''
 
