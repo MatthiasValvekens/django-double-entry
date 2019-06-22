@@ -364,15 +364,21 @@ class KBCCSVParser(BankCSVParser):
             # this is a fallback option, so we don't require this column
             # to be present
             ogm_str = row.get('Vrije mededeling', '').strip()
+            heuristic_ogm = True
+        else:
+            heuristic_ogm = False
         try:
             prefix, modulus = parse_ogm(ogm_str)
         except (ValueError, TypeError):
-            self.error(
-                line_no,
-                _('Illegal OGM string %(ogm)s.') % {
-                    'ogm': ogm_str
-                }
-            )
+            # not much point in generating an error if the candidate OGM was
+            # nicked from an unstructured field
+            if not heuristic_ogm:
+                self.error(
+                    line_no,
+                    _('Illegal OGM string %(ogm)s.') % {
+                        'ogm': ogm_str
+                    }
+                )
             return None
 
         ogm_canonical = ogm_from_prefix(prefix)
