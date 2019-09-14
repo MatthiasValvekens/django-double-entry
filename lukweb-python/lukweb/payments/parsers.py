@@ -1,17 +1,15 @@
 import datetime
 import re
-from _pydecimal import Decimal, DecimalException
-
-from django.conf import settings
 from django.utils import timezone
 from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
-from djmoney.money import Money
 
 
 from .utils import (
     PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER, OGM_REGEX,
-    parse_ogm, ogm_from_prefix
+    parse_ogm, ogm_from_prefix,
+    parse_amount,
+    NegativeAmountError,
 )
 from ..utils import _dt_fallback, CIDictReader
 
@@ -111,25 +109,18 @@ class FinancialCSVParser:
         self._file_read = True
 
     def _parse_amount(self, line_no, amount_str):
-
-        # ugly, but Decimal doesn't really support formatting parameters
-        # (unless we involve the locale module)
-        amt_str = amount_str.replace(',', '.')
-        # even though currency may be available in the input row
-        # we still force EUR, since the data model can't handle
-        # anything else
-        currency = settings.BOOKKEEPING_CURRENCY
-
         try:
-            rd = Decimal(amt_str).quantize(Decimal('.01'))
-            if rd <= 0:
-                return None
-            return Money(rd, currency)
-        except (ValueError, IndexError, DecimalException):
+            return parse_amount(amount_str)
+        except NegativeAmountError:
+            # don't bother flagging this, just silently ignore
+            # (negative amounts can occur in payment imports, but those
+            # transactions simply aren't relevant to us)
+            return None
+        except ValueError:
             self.error(
                 line_no,
                 _('Invalid amount %(amt)s') % {
-                    'amt': amt_str
+                    'amt': amount_str
                 },
             )
             return None
