@@ -1,5 +1,5 @@
 import re
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from django.http import HttpResponse
 from django.conf import settings
@@ -176,3 +176,28 @@ def epc_qr_code_response(*, transaction_amount: Money,
         return response
     except ImportError:
         return HttpResponse('QR code not available', status=503)
+
+
+class NegativeAmountError(ValueError):
+    pass
+
+
+def parse_amount(amount_str: str, raw_decimal=False):
+    # ugly, but Decimal doesn't really support formatting parameters
+    # (unless we involve the locale module)
+    amt_str = amount_str.replace(',', '.')
+
+    try:
+        rd = Decimal(amt_str).quantize(Decimal('.01'))
+    except (ValueError, IndexError, DecimalException):
+        raise ValueError
+
+    if raw_decimal:
+        return rd
+    # even though currency may be available in the input row
+    # we still force EUR, since the data model can't handle
+    # anything else
+    currency = settings.BOOKKEEPING_CURRENCY
+    if rd <= 0:
+        raise NegativeAmountError
+    return Money(rd, currency)
