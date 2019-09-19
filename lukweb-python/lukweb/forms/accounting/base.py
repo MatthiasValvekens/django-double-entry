@@ -39,16 +39,10 @@ class InlineTransactionSplitFormSet(forms.BaseInlineFormSet):
         pmt_act_fk = self.transaction_party_model.get_payment_remote_fk()
         if isinstance(self.instance, accounting_base.BaseDebtRecord):
             account = getattr(self.instance, debt_act_fk)
-            return Q(**{
-                pmt_act_fk: account,
-                'timestamp__gte': self.instance.timestamp
-            })
+            return Q(**{pmt_act_fk: account})
         elif isinstance(self.instance, accounting_base.BasePaymentRecord):
             account = getattr(self.instance, pmt_act_fk)
-            return Q(**{
-                debt_act_fk: account,
-                'timestamp__lte': self.instance.timestamp
-            })
+            return Q(**{debt_act_fk: account})
         else:
             raise TypeError
 
