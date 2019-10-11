@@ -98,40 +98,6 @@ class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin,
     # unreadable payment references should be skipped silently
     unparseable_account_message = None
 
-    @property
-    def overpayment_fmt_string(self):
-        return ' '.join(
-            (
-                ugettext(
-                    'Not all bank transfer payments of %(member)s '
-                    'can be fully utilised.'
-                ),
-                str(bulk_utils.CreditApportionmentMixin.overpayment_fmt_string),
-                self.refund_message
-            )
-        )
-
-    def overpayment_error_params(self, debt_key, *args):
-        params = super().overpayment_error_params(debt_key, *args)
-        params['member'] = str(self._by_id[debt_key])
-        return params
-
-    @cached_property
-    def refund_message(self):
-        # TODO: disentangle this
-        from lukweb import models
-        financial_globals = models.FinancialGlobals.load()
-        refund_category = financial_globals.refund_credit_gnucash_acct
-        autogenerate_refunds = financial_globals.autogenerate_refunds
-        if autogenerate_refunds and refund_category is None:
-            return _(
-                'Refund records cannot be created because the '
-                'corresponding setting in the financial globals is not '
-                'properly configured.'
-            )
-        else:
-            return super().refund_message
-
     def form_kwargs_for_transaction(self, transaction):
         kwargs = super().form_kwargs_for_transaction(transaction)
         kwargs['ogm'] = transaction.account_lookup_str

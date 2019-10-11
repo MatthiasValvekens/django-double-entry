@@ -39,6 +39,15 @@ class ReservationPaymentForm(ModelForm):
 class BaseReservationPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
     transaction_party_model = models.Customer
 
+
+    def refund_credit_gnucash_account(self):
+        from lukweb import models
+        financial_globals = models.FinancialGlobals.load()
+        refund_category = financial_globals.refund_credit_gnucash_acct
+        return (
+            refund_category if financial_globals.autogenerate_refunds else None
+        )
+
     def prepare_payment_instances(self) -> Tuple[
         Iterable[int], Iterable[accounting_base.BasePaymentRecord]
     ]:
