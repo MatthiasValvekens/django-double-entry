@@ -13,7 +13,7 @@ from django.utils.translation import (
 )
 
 from lukweb.fields import ChoirMemberField
-from .base import GnuCashCategory
+from double_entry.models import GnuCashCategory
 
 logger = logging.getLogger(__name__)
 

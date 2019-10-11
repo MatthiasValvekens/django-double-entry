@@ -10,11 +10,11 @@ from django.forms.models import ModelForm, modelformset_factory
 from django.urls import reverse_lazy
 from django.utils.translation import ugettext_lazy as _
 
-from lukweb.widgets import AjaxDatalistInputWidget
-from ...models.accounting import base as accounting_base
-from ...models.accounting.base import BaseDebtPaymentSplit
+from double_entry.forms.widgets import AjaxDatalistInputWidget
+from double_entry import models as accounting_base
+from double_entry.models import BaseDebtPaymentSplit
 
-from . import bulk_utils, base
+from double_entry.forms import bulk_utils, base
 from ... import models
 from ...tasks import dispatch_tickets
 

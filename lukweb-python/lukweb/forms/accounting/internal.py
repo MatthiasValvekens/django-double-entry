@@ -14,19 +14,21 @@ from django.utils.translation import (
     ugettext_lazy as _, ugettext
 )
 
-from lukweb.models.accounting import base as accounting_base
-from lukweb.models.accounting.base import TransactionPartyMixin
-from . import bulk_utils
-from .base import *
-from .bulk_utils import (
+from double_entry import models as accounting_base
+from double_entry.models import TransactionPartyMixin
+from double_entry.forms import bulk_utils
+from double_entry.forms.base import *
+from double_entry.forms.bulk_utils import (
     make_payment_splits,
     ApportionmentResult,
 )
 from ...payments import (DebtCSVParser, MiscDebtPaymentCSVParser)
-from .utils import GnuCashFieldMixin
+from double_entry.forms.utils import GnuCashFieldMixin
 from ... import models
-from ...widgets import (
-    DatalistInputWidget, MoneyWidget, AjaxDatalistInputWidget,
+from double_entry.forms.widgets import (
+    DatalistInputWidget,
+    AjaxDatalistInputWidget,
+    MoneyWidget,
 )
 
 logger = logging.getLogger(__name__)
@@ -710,7 +712,7 @@ def recompute_payment_splits(payments, debt_filter=None, **kwargs):
     what you're doing.
     """
     from ...models import InternalPaymentSplit, ChoirMember
-    from ...models.accounting.base import DoubleBookQuerySet
+    from double_entry.models import DoubleBookQuerySet
     from django.db import transaction
 
     payments_by_member = defaultdict(list)

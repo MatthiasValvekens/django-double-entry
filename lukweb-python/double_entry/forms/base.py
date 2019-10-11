@@ -13,7 +13,7 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
-from ...models.accounting import base as accounting_base
+from double_entry import models as accounting_base
 
 __all__ = [
     'InlineTransactionSplitFormSet', 'BaseInlineTransactionSplitForm',

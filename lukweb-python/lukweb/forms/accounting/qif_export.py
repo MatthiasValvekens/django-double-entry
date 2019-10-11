@@ -1,61 +1,16 @@
 from django import forms
-from django.forms import ValidationError
-from django.forms.models import ModelForm
+from django.core.exceptions import ValidationError
 from django.utils import timezone
-from django.utils.translation import (
-    ugettext_lazy as _,
-)
+from django.utils.translation import ugettext_lazy as _
 
-from ... import payments, models
-from ...widgets import (
-    DatalistInputWidget,
-)
-
-__all__ = ['GnuCashFieldMixin', 'GetQifForm']
-
-
-class GnuCashFieldMixin(ModelForm):
-    require_gnucash = True
-
-    gnucash_field_name = 'gnucash_category'
-
-    gnucash = forms.CharField(
-        widget=DatalistInputWidget(
-            choices=models.GnuCashCategory.objects.all
-        )
-    )
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        gnucash_field = self._meta.model._meta.get_field(
-            self.gnucash_field_name
-        )
-        self.fields['gnucash'].label = gnucash_field.verbose_name
-        self.fields['gnucash'].help_text = gnucash_field.help_text
-        self.fields['gnucash'].required = self.require_gnucash
-        instance = kwargs.get('instance')
-        existing_gc = getattr(instance, self.gnucash_field_name, None)
-        if instance is not None and existing_gc is not None:
-            self.fields['gnucash'].initial = existing_gc.name
-
-    def _save(self, commit=True, set_category=True):
-        instance = super(GnuCashFieldMixin, self).save(commit=False)
-        if commit or set_category:
-            # this potentially writes to the db, so we don't want this
-            # as a clean_field method
-            gnucash_raw = self.cleaned_data['gnucash']
-            gc = models.GnuCashCategory.get_category(gnucash_raw.strip())
-            setattr(instance, self.gnucash_field_name, gc)
-            if commit:
-                instance.save()
-        return instance
-
+from lukweb import models, payments
 
 QUERY_INTERNAL_ACCOUNTS = 1
 QUERY_TICKET_SALES_ACCOUNTS = 2
 
+
 class GetQifForm(forms.Form):
-    
+
     start = forms.DateField(
         label=_('Start date'),
         widget=forms.DateInput(

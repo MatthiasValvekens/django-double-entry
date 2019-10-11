@@ -3,9 +3,7 @@ from decimal import Decimal
 from collections import defaultdict, deque
 from typing import (
     TypeVar, Sequence, Generator, Type, Tuple,
-    Iterator, Optional, Iterable,
-    cast,
-    List,
+    Iterator, Optional, Iterable, cast, List,
 )
 
 from django import forms
@@ -20,13 +18,12 @@ from django.utils.translation import (
 )
 from djmoney.money import Money
 
-from ...models.accounting.base import (
+from double_entry.models import (
     TransactionPartyMixin, BaseDebtPaymentSplit
 )
-from ... import models
-from ...models.accounting import base as accounting_base
-from ...payments import decimal_to_money
-from ..utils import ParserErrorMixin, CSVUploadForm
+from double_entry import models as accounting_base
+from double_entry.utils import decimal_to_money
+from double_entry.forms.utils import ParserErrorMixin, CSVUploadForm
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +552,8 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
 
     @cached_property
     def refund_message(self):
+        # TODO: disentangle this
+        from lukweb import models
         financial_globals = models.FinancialGlobals.load()
         autogenerate_refunds = financial_globals.autogenerate_refunds
         if autogenerate_refunds:
@@ -744,6 +743,8 @@ class BaseCreditApportionmentFormset(forms.BaseModelFormSet):
         account_qs = self.transaction_party_model.objects.filter(
             pk__in=account_pks
         ).with_debt_annotations()
+        # TODO: disentangle this
+        from lukweb import models
         financial_globals = models.FinancialGlobals.load()
         refund_category = financial_globals.refund_credit_gnucash_acct
         autogenerate_refunds = (

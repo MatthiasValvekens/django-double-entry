@@ -6,12 +6,15 @@ from django.utils.translation import ugettext_lazy as _
 
 
 from .utils import (
-    PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER, OGM_REGEX,
-    parse_ogm, ogm_from_prefix,
-    parse_amount,
-    NegativeAmountError,
+    PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER,
 )
-from ..utils import _dt_fallback, CIDictReader
+from ..utils import CIDictReader
+from double_entry.utils import (
+    _dt_fallback, OGM_REGEX, parse_ogm,
+    ogm_from_prefix,
+    NegativeAmountError,
+    parse_amount,
+)
 
 __all__ = [
     'FinancialCSVParser', 'PaymentCSVParser', 'KBCCSVParser', 'FortisCSVParser',
