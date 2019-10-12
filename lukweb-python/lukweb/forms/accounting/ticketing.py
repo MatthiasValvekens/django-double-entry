@@ -10,11 +10,11 @@ from django.forms.models import ModelForm, modelformset_factory
 from django.urls import reverse_lazy
 from django.utils.translation import ugettext_lazy as _
 
-from lukweb.widgets import AjaxDatalistInputWidget
-from ...models.accounting import base as accounting_base
-from ...models.accounting.base import BaseDebtPaymentSplit
+from double_entry.forms.widgets import AjaxDatalistInputWidget
+from double_entry import models as accounting_base
+from double_entry.models import BaseDebtPaymentSplit
 
-from . import bulk_utils, base
+from double_entry.forms import bulk_utils, base
 from ... import models
 from ...tasks import dispatch_tickets
 
@@ -38,6 +38,15 @@ class ReservationPaymentForm(ModelForm):
 
 class BaseReservationPaymentFormSet(bulk_utils.BaseCreditApportionmentFormset):
     transaction_party_model = models.Customer
+
+
+    def refund_credit_gnucash_account(self):
+        from lukweb import models
+        financial_globals = models.FinancialGlobals.load()
+        refund_category = financial_globals.refund_credit_gnucash_acct
+        return (
+            refund_category if financial_globals.autogenerate_refunds else None
+        )
 
     def prepare_payment_instances(self) -> Tuple[
         Iterable[int], Iterable[accounting_base.BasePaymentRecord]

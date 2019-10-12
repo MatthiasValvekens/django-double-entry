@@ -9,7 +9,7 @@ from django.utils.functional import cached_property
 from django.utils.translation import pgettext, get_language, activate
 
 from .utils import PAYMENT_NATURE_CASH, PAYMENT_NATURE_TRANSFER
-from ..utils import _dt_fallback
+from double_entry.utils import _dt_fallback
 from .. import models
 
 logger = logging.getLogger(__name__)

@@ -23,9 +23,12 @@ from django.db.models.fields.reverse_related import ManyToOneRel
 from django.conf import settings
 from djmoney.money import Money
 
-from ...models.utils import make_token
-from ...payments import decimal_to_money, ogm_from_prefix, parse_ogm
-from ...utils import _dt_fallback, validated_bulk_query
+from double_entry.utils import (
+    validated_bulk_query, _dt_fallback, make_token,
+    decimal_to_money,
+    parse_ogm,
+    ogm_from_prefix,
+)
 
 __all__ = [
     'DoubleBookModel', 'ConcreteAmountMixin', 'BaseDebtRecord',

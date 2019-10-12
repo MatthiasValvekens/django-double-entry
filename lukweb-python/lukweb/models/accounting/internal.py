@@ -15,7 +15,9 @@ from django.utils.translation import (
     ugettext_lazy as _, pgettext_lazy, ugettext
 )
 
-from . import base as accounting_base, complex_pricing
+import double_entry.utils
+from . import complex_pricing
+from double_entry import models as accounting_base
 from ... import payments
 from ...fields import (
     ChoirMemberField
@@ -41,9 +43,9 @@ class IDIQuerySet(accounting_base.BaseDebtQuerySet):
                 Value(Decimal('0.00')),
             )
         )
-        zero_money = payments.decimal_to_money(Decimal('0.00'))
+        zero_money = double_entry.utils.decimal_to_money(Decimal('0.00'))
         return defaultdict(lambda: zero_money, {
-            slug: payments.decimal_to_money(v) for slug, v in qs
+            slug: double_entry.utils.decimal_to_money(v) for slug, v in qs
             if not skip_zeroes or v
         })
 
