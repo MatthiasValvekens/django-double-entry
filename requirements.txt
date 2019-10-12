@@ -1,0 +1,7 @@
+Django>=2.1.5
+django-money>=0.14.2
+Pillow>=5.2.0
+py-moneyed>=0.7.0
+python-dateutil==2.7.3
+pytz==2018.4
+qrcode>=6.0
