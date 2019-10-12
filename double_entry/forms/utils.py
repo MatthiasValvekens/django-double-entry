@@ -99,7 +99,7 @@ class CSVUploadForm(forms.Form):
                 raise ValidationError(
                     _('Please upload a .csv file.')
                 )
-            wrapf = io.TextIOWrapper(f, encoding='UTF-8', errors='replace')
+            wrapf = io.TextIOWrapper(f, encoding='utf-8-sig', errors='replace')
             parser_factory = getattr(
                 self, field + '_parser_class', None
             )
