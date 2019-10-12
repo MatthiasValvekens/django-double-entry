@@ -5,7 +5,7 @@ import io
 import re
 import secrets
 from decimal import Decimal, DecimalException
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -16,6 +16,7 @@ from django.utils.text import slugify
 from django.utils.translation import ugettext_lazy as _
 from djmoney.money import Money
 from moneyed import EUR
+
 logger = logging.getLogger(__name__)
 
 
@@ -258,10 +259,71 @@ def parse_amount(amount_str: str, raw_decimal=False):
 
     if raw_decimal:
         return rd
-    # even though currency may be available in the input row
-    # we still force EUR, since the data model can't handle
-    # anything else
     currency = settings.BOOKKEEPING_CURRENCY
     if rd <= 0:
         raise NegativeAmountError
     return Money(rd, currency)
+
+
+class CIDictReader(csv.DictReader):
+
+    def __next__(self):
+        row = super().__next__()
+        # minuscule computational overhead
+        return CIOrderedDict(row)
+
+
+class CIStr(str):
+
+    def __eq__(self, other):
+        if not isinstance(other, str):
+            return False
+        return self.casefold() == other.casefold()
+
+    def __hash__(self):
+        return hash(self.casefold())
+
+
+def as_cistr(key):
+    return key if isinstance(key, CIStr) else CIStr(key)
+
+
+class CIOrderedDict(OrderedDict):
+    # inspired by https://stackoverflow.com/a/32888599/4355619
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._convert_keys()
+
+    def __getitem__(self, key):
+        return super().__getitem__(
+            as_cistr(key))
+
+    def __setitem__(self, key, value):
+        super().__setitem__(as_cistr(key), value)
+
+    def __delitem__(self, key):
+        return super().__delitem__(
+            as_cistr(key))
+
+    def __contains__(self, key):
+        return super().__contains__(as_cistr(key))
+
+    def pop(self, key, *args, **kwargs):
+        return super().pop(as_cistr(key), *args, **kwargs)
+
+    def get(self, key, *args, **kwargs):
+        return super().get(as_cistr(key), *args, **kwargs)
+
+    def setdefault(self, key, *args, **kwargs):
+        return super().setdefault(
+            as_cistr(key), *args, **kwargs)
+
+    def update(self, E=None, **F):
+        super().update(self.__class__(E or {}))
+        super().update(self.__class__(**F))
+
+    def _convert_keys(self):
+        for k in list(self.keys()):
+            v = super().pop(k)
+            self.__setitem__(k, v)
