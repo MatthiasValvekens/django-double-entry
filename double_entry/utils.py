@@ -248,6 +248,8 @@ class NegativeAmountError(ValueError):
 
 
 def parse_amount(amount_str: str, raw_decimal=False):
+    if amount_str is None:
+        raise ValueError
     # ugly, but Decimal doesn't really support formatting parameters
     # (unless we involve the locale module)
     amt_str = amount_str.replace(',', '.')
