@@ -162,7 +162,12 @@ class BaseInlineTransactionSplitForm(forms.ModelForm):
             return
         remote_col_model = self.parent_object.__class__.get_other_half_model()
         split_model, remote_col_name = remote_col_model.get_split_model()
-        about_to_apply = self.cleaned_data[remote_col_name]
+        about_to_apply = self.cleaned_data.get(remote_col_name)
+        # admin inlines seem to need some hand-holding here
+        if about_to_apply is None:
+            self.add_error(
+                remote_col_name, _('This field is required.')
+            )
         if about_to_apply.unmatched_balance < amount:
             raise ValidationError(
                 about_to_apply.insufficient_unmatched_balance_error % {
