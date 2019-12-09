@@ -1,4 +1,5 @@
 import io
+from typing import Optional, List, Tuple
 
 from django import forms
 from django.conf import settings
@@ -49,11 +50,13 @@ class GnuCashFieldMixin(ModelForm):
         return instance
 
 
+ErrorList = List[Tuple[List[int],str]]
+
 class ErrorMixin:
     _ready = False
 
     def __init__(self):
-        self._errors = []
+        self._errors: ErrorList = []
 
     def run(self):
         return
@@ -64,15 +67,17 @@ class ErrorMixin:
         _ready = True
         return
 
-    def error_at_line(self, line_no, msg, params=None):
+    def error_at_line(self, line_no: int, msg: str, params: Optional[dict]=None):
         self.error_at_lines([line_no], msg, params)
 
-    def error_at_lines(self, line_nos, msg, params):
-        fmtd_msg = msg % params
-        self._errors.insert(0, (sorted(line_nos), fmtd_msg))
+    def error_at_lines(self, line_nos: List[int], msg: str,
+                       params: Optional[dict]=None):
+        if params is not None:
+            msg = msg % params
+        self._errors.insert(0, (sorted(line_nos), msg))
 
     @cached_property
-    def errors(self):
+    def errors(self) -> ErrorList:
         self._ensure_ready()
         return sorted(
             self._errors, key=lambda t: t[0]
@@ -85,7 +90,7 @@ class ParserErrorMixin(ErrorMixin):
         super().__init__()
 
     @cached_property
-    def errors(self):
+    def errors(self) -> ErrorList:
         self._ensure_ready()
         if self.parser is not None:
             parser_errors = [
