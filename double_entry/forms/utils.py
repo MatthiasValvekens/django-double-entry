@@ -49,12 +49,11 @@ class GnuCashFieldMixin(ModelForm):
         return instance
 
 
-class ParserErrorMixin:
+class ErrorMixin:
     _ready = False
 
-    def __init__(self, parser):
+    def __init__(self):
         self._errors = []
-        self.parser = parser
 
     def run(self):
         return
@@ -64,6 +63,26 @@ class ParserErrorMixin:
             self.run()
         _ready = True
         return
+
+    def error_at_line(self, line_no, msg, params=None):
+        self.error_at_lines([line_no], msg, params)
+
+    def error_at_lines(self, line_nos, msg, params):
+        fmtd_msg = msg % params
+        self._errors.insert(0, (sorted(line_nos), fmtd_msg))
+
+    @cached_property
+    def errors(self):
+        self._ensure_ready()
+        return sorted(
+            self._errors, key=lambda t: t[0]
+        )
+
+class ParserErrorMixin(ErrorMixin):
+
+    def __init__(self, parser):
+        self.parser = parser
+        super().__init__()
 
     @cached_property
     def errors(self):
