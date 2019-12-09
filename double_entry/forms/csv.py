@@ -1,29 +1,42 @@
 import datetime
 import re
+from dataclasses import dataclass
+from typing import Optional
 
 from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
+from djmoney.money import Money
+
 from double_entry.utils import (
     _dt_fallback, parse_amount, NegativeAmountError,
     OGM_REGEX, parse_ogm, ogm_from_prefix, CIDictReader,
 )
+from double_entry import models
 
 class FinancialCSVParser:
     delimiter = ','
     amount_column_name = 'bedrag'
     date_column_name= 'datum'
+    dt_fallback_with_max = True
 
+    @dataclass
     class TransactionInfo:
-        dt_fallback_with_max = True
+        line_no: int
+        amount: Money
+        timestamp: datetime.datetime
+        account_lookup_str: str
 
-        def __init__(self, *, line_no, amount, timestamp, account_lookup_str):
-            self.ledger_entry = None
-            self.line_no = line_no
-            self.amount = amount
-            self.timestamp = _dt_fallback(
-                timestamp, use_max=self.dt_fallback_with_max
-            )
-            self.account_lookup_str = account_lookup_str
+        @property
+        def ledger_entry(self) -> models.DoubleBookModel:
+            ledger_entry: Optional[models.DoubleBookModel]
+            try:
+                return self._ledger_entry
+            except AttributeError:
+                raise ValueError('Ledger entry not initialised yet')
+
+        @ledger_entry.setter
+        def ledger_entry(self, ledger_entry: models.DoubleBookModel):
+            self._ledger_entry = ledger_entry
 
     def __init__(self, csv_file):
         self.csv_file = csv_file
@@ -38,9 +51,7 @@ class FinancialCSVParser:
         kwargs = self.parse_row_to_dict(line_no, row)
         if kwargs is None:
             return None
-        return self.__class__.TransactionInfo(
-            **kwargs
-        )
+        return self.__class__.TransactionInfo(**kwargs)
 
     def parse_row_to_dict(self, line_no, row):
         amount = self._parse_amount(
@@ -54,6 +65,8 @@ class FinancialCSVParser:
 
         if timestamp is None or amount is None:
             return None
+
+        timestamp = _dt_fallback(timestamp, self.dt_fallback_with_max)
         return {
             'amount': amount,
             'timestamp': timestamp,
