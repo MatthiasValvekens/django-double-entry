@@ -1,3 +1,4 @@
+import abc
 import io
 from typing import Optional, List, Tuple
 
@@ -52,10 +53,37 @@ class GnuCashFieldMixin(ModelForm):
 
 ErrorList = List[Tuple[List[int],str]]
 
-class ErrorMixin:
+class ErrorMixin(abc.ABC):
+
+    @abc.abstractmethod
+    def error_at_line(self, line_no: int, msg: str, params: Optional[dict]=None):
+        pass
+
+    @abc.abstractmethod
+    def error_at_lines(self, line_nos: List[int], msg: str,
+                       params: Optional[dict]=None):
+        pass
+
+
+class ErrorContextWrapper(ErrorMixin):
+
+    def __init__(self, error_context: ErrorMixin):
+        self.error_context = error_context
+
+    def error_at_line(self, line_no: int, msg: str,
+                      params: Optional[dict] = None):
+        self.error_context.error_at_line(line_no, msg, params)
+
+    def error_at_lines(self, line_nos: List[int], msg: str,
+                       params: Optional[dict] = None):
+        self.error_context.error_at_lines(line_nos, msg, params)
+
+
+class ParserErrorMixin(ErrorMixin):
     _ready = False
 
-    def __init__(self):
+    def __init__(self, parser):
+        self.parser = parser
         self._errors: ErrorList = []
 
     def run(self):
@@ -75,19 +103,6 @@ class ErrorMixin:
         if params is not None:
             msg = msg % params
         self._errors.insert(0, (sorted(line_nos), msg))
-
-    @cached_property
-    def errors(self) -> ErrorList:
-        self._ensure_ready()
-        return sorted(
-            self._errors, key=lambda t: t[0]
-        )
-
-class ParserErrorMixin(ErrorMixin):
-
-    def __init__(self, parser):
-        self.parser = parser
-        super().__init__()
 
     @cached_property
     def errors(self) -> ErrorList:
