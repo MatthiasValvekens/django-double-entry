@@ -153,6 +153,11 @@ def parse_ogm(ogm_str, match=None, validate=True):
     return prefix, modulus
 
 
+def normalise_ogm(ogm_str, validate=True):
+    prefix, modulus = parse_ogm(ogm_str, validate=validate)
+    return ogm_from_prefix(prefix)
+
+
 def ogm_from_prefix(prefix, formatted=True):
     if isinstance(prefix, int):
         prefix_str = '%010d' % prefix
