@@ -6,6 +6,7 @@ import re
 import secrets
 from decimal import Decimal, DecimalException
 from collections import defaultdict, OrderedDict
+from typing import Generator, TypeVar, Any, List, Tuple
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -19,6 +20,17 @@ from moneyed import EUR
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar('T')
+S = TypeVar('S')
+# TODO: think of a more pythonic way to do this, this feels off
+def consume_with_result(generator: Generator[T, Any, S]) -> Tuple[List[T], S]:
+    result: S = None
+    def _wrapper():
+        nonlocal result
+        result = yield from generator
+    iter_result = list(_wrapper())
+    assert result is not None
+    return iter_result, result
 
 def validated_bulk_query(get_search_param, ignorecase=False):
     """
