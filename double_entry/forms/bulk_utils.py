@@ -1,29 +1,39 @@
+import dataclasses
 import logging
+import datetime
+from dataclasses import dataclass
 from decimal import Decimal
 from collections import defaultdict, deque
+from enum import IntFlag
+from itertools import chain
 from typing import (
     TypeVar, Sequence, Generator, Type, Tuple,
     Iterator, Optional, Iterable, cast, List,
+    Generic, ClassVar, Dict, Any
 )
 
 from django import forms
 from django.conf import settings
 from django.core.exceptions import SuspiciousOperation
 from django.db import transaction as db_transaction
+from django.db.models import ForeignKey
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import (
-    ugettext_lazy as _,
-    ugettext,
+    ugettext_lazy as _, ugettext,
 )
 from djmoney.money import Money
 
+from double_entry.forms.csv import TransactionInfo, FinancialCSVParser
 from double_entry.models import (
     TransactionPartyMixin, BaseDebtPaymentSplit
 )
-from double_entry import models as accounting_base
-from double_entry.utils import decimal_to_money
-from double_entry.forms.utils import ParserErrorMixin, CSVUploadForm
+from double_entry import models as accounting_base, models
+from double_entry.utils import decimal_to_money, consume_with_result
+from double_entry.forms.utils import (
+    CSVUploadForm, ErrorMixin,
+    ParserErrorMixin, ErrorContextWrapper,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,114 +46,136 @@ originating from .csv files
 # TODO: unified method to mark required/optional columns
 
 
-class LedgerEntryPreparator(ParserErrorMixin):
-    model: accounting_base.DoubleBookModel = None
-    formset_class = None
-    formset_prefix = None
-    _valid_transactions = None
-    _formset = None
+# an error prevents further processing, a warning doesn't
+# TODO maybe support "overrulable" errors? Makes sense e.g. for duplicates
+class ResolvedTransactionVerdict(IntFlag):
+    COMMIT = 0
+    SUGGEST_DISCARD = 1
+    DISCARD = 3
 
-    def __init__(self, parser):
-        super().__init__(parser)
-        if parser is not None:
-            self.transactions = parser.parsed_data
-        else:
-            self.transactions = []
+class ResolvedTransactionMessageContext:
+    """
+    Verdicts saved here are merely intended for communication with the user,
+    enforcement is up to the individual ledger preparators.
+    """
 
-    def error_at_line(self, line_no, msg, params=None):
-        self.error_at_lines([line_no], msg, params)
+    def __init__(self):
+        self._verdict: ResolvedTransactionVerdict = \
+            ResolvedTransactionVerdict.COMMIT
+        self.transaction_errors = []
+        self.transaction_warnings = []
+        self.transaction_success = []
 
-    def error_at_lines(self, line_nos, msg, params):
-        fmtd_msg = msg % params
-        self._errors.insert(0, (sorted(line_nos), fmtd_msg))
+    def discard(self):
+        self._verdict = ResolvedTransactionVerdict.DISCARD
 
-    # The prepare/review methods are called before
-    # and after transaction validation, respectively.
-    # The review method can access and use
-    # self.valid_transactions.
-    def prepare(self):
-        return
-
-    def review(self):
-        return
-
-    def model_kwargs_for_transaction(self, transaction):
-        # validate and build model kwargs for transaction
-        if transaction.amount.amount < 0:
-            self.error_at_line(
-                transaction.line_no,
-                _('Payment amount %(amount)s is negative.'),
-                params={'amount': transaction.amount}
-            )
-            return None
-
-        return {
-            'total_amount': transaction.amount,
-            'timestamp': transaction.timestamp
-        } 
-
-    def validate_global(self, valid_transactions):
-        # this method can assume that all transactions have the
-        # ledger_entry property set to something meaningful
-        return valid_transactions
+    def suggest_skip(self):
+        self._verdict |= ResolvedTransactionVerdict.SUGGEST_DISCARD
 
     @property
-    def valid_transactions(self): 
-        if self._valid_transactions is None:
-            self.prepare()
-            def valid(t):
-                kwargs = self.model_kwargs_for_transaction(t)
-                if kwargs is not None:
-                    t.ledger_entry = self.model(**kwargs)
-                    return True
-                else:
-                    return False
-            indiv_transactions = [
-                t for t in self.transactions if valid(t)
-            ]
-            self._valid_transactions = self.validate_global(indiv_transactions)
-            self.review()
+    def verdict(self) -> ResolvedTransactionVerdict:
+        return self.verdict
 
-        return self._valid_transactions
+    def error(self, msg: str, params: Optional[dict]=None):
+        self.discard()
+        self.transaction_errors.append(msg if params is None else msg % params)
 
-    def form_kwargs_for_transaction(self, transaction):
-        if self._valid_transactions is None:
-            raise ValueError(
-                'Ledger entries are not ready.'
-            )
-        return {
-            'total_amount': transaction.amount,
-            'timestamp': transaction.timestamp
-        }
+    def warning(self, msg: str, params: Optional[dict]=None):
+        self.transaction_warnings.append(msg if params is None else msg % params)
 
-    def formset_kwargs(self):
-        return {}
+    def success(self, msg: str, params: Optional[dict]=None):
+        self.transaction_success.append(msg if params is None else msg % params)
 
-    def run(self):
-        initial_data = [
-            self.form_kwargs_for_transaction(t)
-            for t in self.valid_transactions
-        ]
-        fs = self.formset_class(
-            queryset=self.model._default_manager.none(),
-            initial=initial_data,
-            prefix=self.formset_prefix,
-            **self.formset_kwargs()
-        )
-        fs.extra = len(self.valid_transactions)
-        self._formset = fs
+    @staticmethod
+    def mass_suggest_skip(contexts):
+        for c in contexts:
+            c.suggest_skip()
+
+    @staticmethod
+    def mass_discard(contexts):
+        for c in contexts:
+            c.discard()
+
+    @classmethod
+    def broadcast_error(cls, contexts: List['ResolvedTransactionMessageContext'],
+                        msg: str, params: Optional[dict]=None):
+        for c in contexts:
+            c.error(msg, params)
+
+    @classmethod
+    def broadcast_warning(cls, contexts: List['ResolvedTransactionMessageContext'],
+                          msg: str, params: Optional[dict]):
+        for c in contexts:
+            c.warning(msg, params)
+
+
+class TransactionWithMessages:
+    message_context: ResolvedTransactionMessageContext = None
+    do_not_skip: bool = False
 
     @property
-    def formset(self):
-        if self._formset is None:
-            self.run()
-        return self._formset
+    def to_commit(self):
+        v = self.message_context.verdict
+        if self.do_not_skip:
+            # ignore a a suggest_discard verdict
+            v &= ~ResolvedTransactionVerdict.SUGGEST_DISCARD
+        return bool(v)
+
+    def discard(self):
+        self.message_context.discard()
+
+    def suggest_skip(self):
+        self.message_context.suggest_skip()
 
 
-class TransactionPartyIndexBuilder:
-    def __init__(self, ledger_preparator):
-        self.transaction_index = defaultdict(list)
-        self.ledger_preparator: FetchTransactionAccountsMixin = ledger_preparator
+
+def broadcast_error(transactions: List[TransactionWithMessages],
+                        msg: str, params: Optional[dict]):
+    if not transactions:
+        raise ValueError('no transactions to which error applies')
+    errs = list(tr.message_context for tr in transactions)
+    err_cls = errs[0].__class__
+    if any(err.__class__ != err_cls for err in errs):
+        raise ValueError('Cannot combine message contexts of different types')
+    err_cls.broadcast_error(errs, msg, params)
+
+def broadcast_warning(transactions: List[TransactionWithMessages],
+                    msg: str, params: Optional[dict]):
+    if not transactions:
+        raise ValueError('no transactions to which warning applies')
+    errs = list(tr.message_context for tr in transactions)
+    err_cls = errs[0].__class__
+    if any(err.__class__ != err_cls for err in errs):
+        raise ValueError('Cannot combine message contexts of different types')
+    err_cls.broadcast_warning(errs, msg, params)
+
+
+@dataclass(frozen=True)
+class ResolvedTransaction(TransactionWithMessages):
+    transaction_party_id: int
+    amount: Money
+    timestamp: datetime.datetime
+    pipeline_section_id: int
+    message_context: ResolvedTransactionMessageContext
+    do_not_skip: bool=False
+
+    def html_ignore(self):
+        return 'message_context', 'do_no_skip'
+
+
+TI = TypeVar('TI', bound=TransactionInfo)
+RT = TypeVar('RT', bound=ResolvedTransaction)
+TP = TypeVar('TP', bound=accounting_base.TransactionPartyMixin)
+LE = TypeVar('LE', bound=accounting_base.DoubleBookModel)
+
+class TransactionPartyIndexBuilder(Generic[TP]):
+    transaction_party_model: ClassVar[Type[TP]]
+
+    def __init__(self, resolver: 'LedgerResolver'[TP]):
+        self.resolver = resolver
+
+    def lookup(self, account_lookup_str: str) -> Optional[TP]:
+        raise NotImplementedError
 
     @classmethod
     def lookup_key_for_account(cls, account):
@@ -152,19 +184,61 @@ class TransactionPartyIndexBuilder:
     def append(self, tinfo):
         raise NotImplementedError
 
-    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+    def execute_query(self):
         raise NotImplementedError
 
-    def populate_indexes(self):
-        for p in self.execute_query():
-            self.ledger_preparator._by_id[p.pk] = p
-            self.ledger_preparator._by_lookup_str[
-                self.__class__.lookup_key_for_account(p)
-            ] = p
+
+class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
+    """
+    Report errors with line numbers to a central error handler,
+    and also keep track of error messages that are "local"
+    to a resolved transaction.
+    """
+
+    def __init__(self, error_mixin, tinfo: TransactionInfo):
+        super().__init__()
+        self.error_mixin = error_mixin
+        self.tinfo = tinfo
+
+    @classmethod
+    def broadcast_error(cls, contexts: List['RTErrorContextFromMixin'],
+                        msg: str, params: Optional[dict]=None):
+        line_nos = [c.tinfo.line_no for c in contexts]
+        ctxt = contexts[0]
+        ctxt.error_mixin.error_at_lines(line_nos, msg, params)
+        for ctxt in contexts:
+            ctxt.discard()
+            ctxt.transaction_errors.append(
+                msg if params is None else msg % params
+            )
 
 
-class FetchTransactionAccountsMixin(LedgerEntryPreparator):
-    transaction_party_model: Type[TransactionPartyMixin]
+    def error(self, msg: str, params=Optional[dict]):
+        self.error_mixin.error_at_line(self.tinfo.line_no, msg, params)
+        super().error(msg, params)
+
+    @classmethod
+    def broadcast_warning(cls, contexts: List['RTErrorContextFromMixin'],
+                        msg: str, params: Optional[dict]):
+        line_nos = [c.tinfo.line_no for c in contexts]
+        ctxt = contexts[0]
+        ctxt.error_mixin.error_at_lines(line_nos, msg, params)
+        for ctxt in contexts:
+            ctxt.transaction_warnings.append(
+                msg if params is None else msg % params
+            )
+
+
+    def warning(self, msg: str, params=Optional[dict]):
+        self.error_mixin.error_at_line(self.tinfo.line_no, msg, params)
+        super().warning(msg, params)
+
+# TODO: implement APIErrorContext
+
+class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT]):
+    transaction_party_model: ClassVar[Type[TP]]
+    transaction_info_class: ClassVar[Type[TI]]
+    resolved_transaction_class: ClassVar[Type[RT]]
 
     unknown_account_message = _(
         'Transaction account %(account)s unknown. '
@@ -181,49 +255,55 @@ class FetchTransactionAccountsMixin(LedgerEntryPreparator):
         'Skipped processing.'
     )
 
-    _by_id = None
-    _by_lookup_str = None
+    def __init__(self, error_context: ErrorMixin, pipeline_section_id: int):
+        self.pipeline_section_id = pipeline_section_id
+        super().__init__(error_context)
 
-    def get_lookup_builders(self):
+    def __init_subclass__(cls, *args, abstract=False, **kwargs):
+        if cls.transaction_party_model is None:
+            raise TypeError('Ledger resolver must set transaction_party_model')
+        super().__init_subclass__(*args, **kwargs)
+
+    def get_index_builders(self) -> List[TransactionPartyIndexBuilder[TP]]:
         raise NotImplementedError
 
-    def get_account(self, *, pk=None, lookup_str=None):
-        if pk is not None:
-            return self._by_id[pk]
-        elif lookup_str is not None:
-            return self._by_lookup_str[lookup_str]
-        raise ValueError('You must supply either pk or lookup_str')
+    def resolve_account(self, tinfo: TI, transaction_party_id) -> RT:
+        tinfo_dict = dataclasses.asdict(tinfo)
+        del tinfo_dict['account_lookup_str']
+        del tinfo_dict['line_no']
+        return self.resolved_transaction_class(
+            transaction_party_id=transaction_party_id,
+            error_context=RTErrorContextFromMixin(self, tinfo),
+            pipeline_section_id=self.pipeline_section_id,
+            **tinfo_dict,
+        )
 
-    def account_ids(self):
-        return self._by_id.keys()
-
-    def unknown_account(self, account_lookup_str, line_nos):
+    def unknown_account(self, account_lookup_str: str, line_nos: List[int]):
         self.error_at_lines(
             line_nos, self.unknown_account_message,
             params={'account': account_lookup_str}
         )
 
-    def ambiguous_account(self, account_lookup_str, line_nos):
+    def ambiguous_account(self, account_lookup_str: str, line_nos: List[int]):
         self.error_at_lines(
             line_nos, self.ambiguous_account_message,
             params={'account': account_lookup_str}
         )
 
-    def unparseable_account(self, account_lookup_str, line_no):
+    def unparseable_account(self, account_lookup_str: str, line_no: int):
         if self.unparseable_account_message is not None:
             self.error_at_line(
                 line_no, self.unparseable_account_message,
                 params={'account': account_lookup_str}
             )
 
-    def prepare(self):
-        super().prepare()
-        self._by_id = dict()
-        self._by_lookup_str = dict()
-        lookup_builders = self.get_lookup_builders()
-        for info in self.transactions:
+    def populate_indexes(self, transactions: List[TI]) \
+            -> List[TransactionPartyIndexBuilder[TP]]:
+        indexes = self.get_index_builders()
+        # first, prime the index builders with all lookup strings
+        for info in transactions:
             appended = False
-            for builder in lookup_builders:
+            for builder in indexes:
                 appended |= builder.append(info)
                 if appended:
                     break
@@ -231,42 +311,211 @@ class FetchTransactionAccountsMixin(LedgerEntryPreparator):
                 self.unparseable_account(
                     info.account_lookup_str, info.line_no
                 )
+        # execute bulk lookup DB queries
+        #  (the index builders are given the opportunity to not hammer the DB)
+        for index in indexes:
+            index.execute_query()
+        return indexes
 
-        for builder in lookup_builders:
-            builder.populate_indexes()
+    def __call__(self, transactions: List[TI]) -> Iterable[Tuple[TP, RT]]:
+        # TODO: this is kind of a silly way of doing things
+        _by_id: Dict[int, TP] = {}
+        _resolved_by_id: Dict[int, List[RT]] = {}
 
-        # It's technically more efficient to keep the transaction dicts around
-        # to refer to later, but since later calls to validate_global might
-        # shrink the list of valid transactions, this is a bad idea for
-        # maintainability. Amdahl.
+        indexes = self.populate_indexes(transactions)
+        for info in transactions:
+            # walk through indexes to collect account data
+            for index in indexes:
+                account = index.lookup(info.account_lookup_str)
+                if account is not None:
+                    _by_id[account.pk] = account
+                    resolved = self.resolve_account(info, account.pk)
+                    _resolved_by_id[account.pk].append(resolved)
+                    break
+            # no need to generate an error if we get here, the
+            # index builders will have taken care of that
 
-class DuplicationProtectedPreparator(LedgerEntryPreparator):
+        for account_id, acct in _by_id.items():
+            yield acct, _resolved_by_id[account_id]
+
+
+@dataclass(frozen=True)
+class PreparedTransaction(TransactionWithMessages, Generic[LE, RT]):
+    transaction: RT
+    ledger_entry: LE
+
+    @property
+    def message_context(self):
+        return self.transaction.message_context
+
+
+PreparedTransactionList = Iterable[PreparedTransaction[LE,RT]]
+
+class LedgerEntryPreparator(Generic[LE, TP, RT]):
+    model: ClassVar[Type[LE]]
+    transaction_party_model: ClassVar[Type[TP]]
+    # fk to transaction party model on ledger entry model
+    account_field: str = None
+    _valid_transactions = None
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if cls.account_field is not None:
+            return
+
+        # have to do this here, we don't know whether we're
+        # dealing with payments or debts
+        model: Type[LE] = cls.model
+        tpm: Type[TP] = cls.transaction_party_model
+        if model is None or tpm is None:
+            return  # abstract
+        def is_candidate(field):
+            if not isinstance(field, ForeignKey):
+                return False
+            remote_model = field.remote_field.model
+            return remote_model == tpm
+        try:
+            account_field, = (
+                is_candidate(f) for f in model._meta.get_fields()
+            )
+        except ValueError:
+            raise TypeError(
+                'Could not establish a link between transaction party model '
+                'and ledger entry model. Please set the `account_field` '
+                'class attribute.'
+            )
+        cls.account_field = account_field.name
+
+    def __init__(self, resolved_transactions: Iterable[Tuple[TP, RT]]):
+        # ensure that resolved transactions are always sorted
+        # in chronological order
+        self.resolved_transactions = sorted(
+            resolved_transactions, key=lambda p: p[1].timestamp
+        )
+        # extra pass, but meh
+        self._account_ix: Dict[int, TP] = {
+            tp.pk: tp for tp, rt in resolved_transactions
+        }
+
+    # mainly useful for after-the-fact error reporting
+    def get_account(self, account_id: int) -> TP:
+        return self._account_ix[account_id]
+
+    def account_ids(self) -> Iterable[int]:
+        return self._account_ix.keys()
+
+    def model_kwargs_for_transaction(self, acct: TP, transaction: RT) \
+            -> Optional[dict]:
+        # validate and build model kwargs for transaction
+        if transaction.amount.amount < 0:
+            err: ResolvedTransactionMessageContext = transaction.error_context
+            err.error(
+                _('Payment amount %(amount)s is negative.'), {
+                    'amount': transaction.amount
+                }
+            )
+            return None
+
+        return {
+            'total_amount': transaction.amount,
+            'timestamp': transaction.timestamp,
+            self.__class__.account_field: acct
+        }
+
+    def validate_global(self, valid_transactions: PreparedTransactionList) \
+            -> PreparedTransactionList:
+        # this method can assume that all transactions have the
+        # ledger_entry property set to something meaningful
+        return iter(valid_transactions)
+
+    def _prepare_and_validate(self):
+        if self._valid_transactions is not None:
+            return
+        resolved: List[Tuple[TP, RT]] = self.resolved_transactions
+        # initialise ORM objects when possible, and collect the valid ones
+        def indiv_transactions() -> Iterable[PreparedTransaction[RT, LE]]:
+            acct: TransactionPartyMixin
+            for acct, t in resolved:
+                kwargs = self.model_kwargs_for_transaction(acct, t)
+                if kwargs is None:
+                    continue
+                entry: LE = self.model(**kwargs)
+                entry.spoof_matched_balance(Decimal('0.00'))
+                yield PreparedTransaction(t, entry)
+
+        self._valid_transactions = list(
+            self.validate_global(indiv_transactions())
+        )
+
+    @property
+    def valid_transactions(self) -> List[PreparedTransaction[LE,RT]]:
+        if self._valid_transactions is None:
+            self._prepare_and_validate()
+        return self._valid_transactions
+
+    # Either review or commit will be called, but not both
+
+    def review(self):
+        # ensure that valid transactions get computed no matter what
+        self._prepare_and_validate()
+        return
+
+    def commit(self):
+        from django.db import connection
+        can_bulk_save = connection.features.can_return_ids_from_bulk_insert
+
+        all_ledger_entries = [
+            t.ledger_entry for t in self.valid_transactions
+        ]
+
+        if can_bulk_save:
+            self.model.objects.bulk_create(all_ledger_entries)
+        else:
+            logger.debug(
+                'Database does not support RETURNING on bulk inserts. '
+                'Fall back to saving in a loop.'
+            )
+            for le in all_ledger_entries:
+                le.save()
+
+
+class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
     single_dup_message = None
     multiple_dup_message = None
 
-    def validate_global(self, valid_transactions):
+    def validate_global(self, valid_transactions: PreparedTransactionList):
         valid_transactions = super().validate_global(valid_transactions)
         # early out, nothing to do
         if not valid_transactions:
             return []
         dates = [
-            timezone.localdate(t.timestamp) for t in valid_transactions
+            timezone.localdate(t.transaction.timestamp)
+            for t in valid_transactions
         ]
 
         historical_buckets = self.model._default_manager.dupcheck_buckets(
             date_bounds=(min(dates), max(dates))
         )
 
-        import_buckets = defaultdict(list)
+        import_buckets: Dict[Any, List[PreparedTransaction]] = defaultdict(list)
         for transaction in valid_transactions:
-            sig = transaction.ledger_entry.dupcheck_signature
+            # have to assert this, the typing hints aren't flexible enough
+            # TODO think of a cleaner way
+            e = cast(accounting_base.DuplicationProtectionMixin,
+                     transaction.ledger_entry)
+            sig = e.dupcheck_signature
             import_buckets[sig].append(transaction)
 
         def strip_duplicates():
+            transactions: List[PreparedTransaction]
             for dup_sig, transactions in import_buckets.items():
                 occ_in_import = len(transactions)
                 occ_in_hist = historical_buckets[dup_sig]
                 dupcount = min(occ_in_hist, occ_in_import)
+                # skip the first dupcount entries, we treat those as the
+                # duplicate ones. The others will be entered into the db
+                # as usual
+                yield from transactions[dupcount:]
                 if occ_in_hist:
                     # signal duplicate with an error message
                     params = self.dup_error_params(dup_sig)
@@ -281,17 +530,16 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator):
                     else:
                         msg_fmt_str = self.multiple_dup_message
                     # report duplicate error
-                    self.error_at_lines(
-                        [t.line_no for t in transactions],
-                        msg_fmt_str,
-                        params=params
-                    )
-                # skip the first dupcount entries, we treat those as the 
-                # duplicate ones. The others will be entered into the db
-                # as usual
-                yield from transactions[dupcount:]
+                    dups = transactions[:dupcount]
 
-        return list(strip_duplicates())
+                    broadcast_warning(dups, msg_fmt_str, params)
+                    # honour do_not_skip
+                    for d in dups:
+                        d.suggest_skip()
+                        if d.to_commit:
+                            yield d
+
+        return strip_duplicates()
                 
 
     def dup_error_params(self, signature_used):
@@ -514,8 +762,8 @@ def refund_overpayment(
     return refund_object, splits_to_create()
 
 
-
-class CreditApportionmentMixin(LedgerEntryPreparator):
+PLE = TypeVar('PLE', bound=models.BasePaymentRecord)
+class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
 
     overpayment_fmt_string = _(
         'Received %(total_credit)s, but only %(total_used)s '
@@ -528,17 +776,23 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
     payment_fk_name = None
     debt_fk_name = None
     _trans_buckets = None
+
+    refund_credit_gnucash_account: Optional[models.GnuCashCategory] = None
     results: ApportionmentResult = None
 
     @property
-    def split_model(self) -> Type[ST]:
-        return cast(Type[ST], self.model.get_split_model()[0])
+    def split_model(self):
+        return self.model.get_split_model()[0]
 
     def debts_for(self, debt_key):
         raise NotImplementedError
 
     def transaction_buckets(self):
         raise NotImplementedError
+
+    # by default, debt keys are simply PK's of transaction parties
+    def get_account_from_debt_key(self, debt_key):
+        return self.get_account(debt_key)
 
     def overpayment_error_params(self, debt_key, total_used,
                                  total_credit, remaining_payments):
@@ -568,29 +822,23 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
                 'Please resolve this issue manually.'
             )
 
+    def _split_gen(self, debts, payments):
+        return make_payment_splits(
+            payments, debts, self.split_model,
+            payment_fk_name=self.payment_fk_name,
+            debt_fk_name=self.debt_fk_name
+        )
+
     def simulate_apportionments(self, debt_key, debts, transactions) \
             -> ApportionmentResult:
-        payments = sorted([
-                t.ledger_entry for t in transactions
-            ],
-            key=lambda p: p.timestamp
-        )
-
-        results: Optional[ApportionmentResult] = None
-        def _split_gen_wrapper():
-            nonlocal results
-            results = yield from make_payment_splits(
-                payments, debts, self.split_model,
-                payment_fk_name=self.payment_fk_name,
-                debt_fk_name=self.debt_fk_name
-            )
+        payments = [t.ledger_entry for t in transactions]
+        split_generator = self._split_gen(debts, payments)
+        splits, results = consume_with_result(split_generator)
 
         total_used = sum(
-            (s.amount for s in _split_gen_wrapper()),
+            (s.amount for s in splits),
             Money(0, settings.BOOKKEEPING_CURRENCY)
         )
-
-        assert results is not None
 
         total_credit = sum(
             (p.total_amount for p in payments),
@@ -598,9 +846,8 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
         )
 
         if total_used < total_credit:
-            self.error_at_lines(
-                [t.line_no for t in transactions],
-                self.overpayment_fmt_string,
+            broadcast_warning(
+                transactions, self.overpayment_fmt_string,
                 params=self.overpayment_error_params(
                     debt_key, total_used, total_credit,
                     results.remaining_payments
@@ -621,29 +868,88 @@ class CreditApportionmentMixin(LedgerEntryPreparator):
                 key, debts, transactions
             )
 
+    def commit(self):
+        # save payments before building splits, otherwise the ORM
+        # will not set fk's correctly
+        super().commit()
 
-class StandardCreditApportionmentMixin(CreditApportionmentMixin,
-                                       FetchTransactionAccountsMixin):
+        from django.db import connection
+        can_bulk_save = connection.features.can_return_ids_from_bulk_insert
+        global_results = ApportionmentResult()
+
+        refund_category = self.refund_credit_gnucash_account
+        autogenerate_refunds = refund_category is not None
+        debt_account_field = self.transaction_party_model.get_debt_remote_fk()
+        debt_model = self.transaction_party_model.get_debt_model()
+
+        def splits_to_create() -> Iterator[BaseDebtPaymentSplit]:
+            nonlocal global_results
+            refunds_to_save = []
+            refund_splits_to_save = []
+
+            for key, transactions in self._trans_buckets.items():
+                debts = self.debts_for(key)
+                # accumulate results for (optional) later processing
+                results = yield from self._split_gen(
+                    debts, [t.ledger_entry for t in transactions]
+                )
+                global_results += results
+
+                if autogenerate_refunds:
+                    debt_kwargs = {
+                        'gnucash_category': refund_category,
+                        debt_account_field: self.get_account_from_debt_key(key)
+                    }
+                    refund_data = refund_overpayment(
+                        results.remaining_payments,
+                        debt_kwargs=debt_kwargs
+                    )
+                    # we cannot yield from the refund splits here
+                    # since the refund object hasn't been saved yet
+                    if refund_data is not None:
+                        refund_object, refund_splits = refund_data
+                        if can_bulk_save:
+                            refunds_to_save.append(refund_object)
+                            refund_splits_to_save.append(refund_splits)
+                        else:
+                            refund_object.save()
+                            yield from refund_splits
+            if can_bulk_save:
+                # save all refund objects and create/yield all refund splits
+                debt_model.objects.bulk_create(refunds_to_save)
+                for splits in refund_splits_to_save:
+                    yield from splits
+
+        self.transaction_party_model.get_split_model().objects.bulk_create(
+            splits_to_create()
+        )
+
+        # allow subclasses to hook into the ApportionmentResults
+        # We only set this here to avoid potential shenanigans with partial
+        # state.
+        self.results = global_results
+
+
+class StandardCreditApportionmentMixin(CreditApportionmentMixin):
+    transaction_party_model: Type[accounting_base.TransactionPartyMixin]
 
     @property
     def model(self):
         return self.transaction_party_model.get_payment_model()
 
-    def get_lookup_builders(self):
-        raise NotImplementedError
-
     def transaction_buckets(self):
         trans_buckets = defaultdict(list)
         tpm = self.transaction_party_model
-        payment_fk_name = tpm.get_payment_remote_fk_column()
         debt_fk_name = tpm.get_debt_remote_fk_column()
+        account_ids = set()
         for t in self.valid_transactions:
-            account_id = getattr(t.ledger_entry, payment_fk_name)
+            account_id = t.transaction.transaction_party_id
             trans_buckets[account_id].append(t)
+            account_ids.add(account_id)
         base_qs = tpm.get_debt_model()._default_manager
 
         debt_qs = base_qs.filter(**{
-            '%s__in' % debt_fk_name: self.account_ids()
+            '%s__in' % debt_fk_name: account_ids
         }).with_payments().unpaid().order_by('timestamp')
 
         debt_buckets = defaultdict(list)
@@ -657,23 +963,111 @@ class StandardCreditApportionmentMixin(CreditApportionmentMixin,
     def debts_for(self, debt_key):
         return self._debt_buckets[debt_key]
 
-    def model_kwargs_for_transaction(self, transaction):
-        kwargs = super().model_kwargs_for_transaction(transaction)
-        if kwargs is None:
-            return None
-        try:
-            account = self._by_lookup_str[transaction.account_lookup_str]
-            acct_field = self.transaction_party_model.get_payment_remote_fk()
-            kwargs[acct_field] = account
-            return kwargs
-        except KeyError:
-            # member search errors have already been logged
-            # in the preparation step, so we don't care
-            return None
+
+class PaymentPipelineSection(ErrorContextWrapper, Generic[LE, TP, RT, TI]):
+    resolver_class: Type[LedgerResolver[TP, TI, RT]]
+    ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]]
+
+    @classmethod
+    def transaction_party_queryset(cls):
+        raise NotImplementedError
+
+    def __init__(self, error_context: ErrorMixin, pipeline_section_id: int):
+        self.pipeline_section_id = pipeline_section_id
+        super().__init__(error_context)
+
+    def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
+        resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
+            self.error_context, self.pipeline_section_id
+        )
+        return resolver(parsed_data)
+
+    def review(self, resolved: Iterable[Tuple[TP, RT]]):
+        preparator = self.ledger_preparator_class(resolved)
+        # accumulate review errors if necessary
+        preparator.review()
+        # errors/warnings are saved on the resolved transaction objects, so
+        # it suffices to present these as feedback to the user
+        # all other data is irrelevant to the pipeline
+        return preparator
+
+    def commit(self, resolved: Iterable[Tuple[TP, RT]]):
+        preparator = self.ledger_preparator_class(resolved)
+        preparator.commit()
+        return preparator
+
+
+PipelineResolved = List[List[Tuple[TransactionPartyMixin, ResolvedTransaction]]]
+
+class PaymentPipelineError(ValueError):
+    pass
+
+class PaymentPipeline(ParserErrorMixin):
+    pipeline_section_classes: List[Type[PaymentPipelineSection]] = []
+
+    def __init__(self, parser=None, resolved: Optional[List[ResolvedTransaction]]=None):
+        if parser is None and resolved is None:
+            raise PaymentPipelineError(
+                'One of \'parser\' and \'resolved\' must be non-null'
+            )
+        super().__init__(parser)
+        self.pipeline_sections = [
+            cl(self, i) for i, cl in enumerate(self.pipeline_section_classes)
+        ]
+        pipeline_count = len(self.pipeline_section_classes)
+        if resolved is None:
+            self.resolved: Optional[PipelineResolved] = None
+        else:
+            # divvy up the resolved transactions per pipeline section
+            by_section = [[] for _i in range(pipeline_count)]
+            for tr in resolved:
+                try:
+                    by_section[tr.pipeline_section_id].append(tr)
+                except IndexError:
+                    raise PaymentPipelineError(
+                        '%(id)d is not a valid pipeline section ID' % {
+                            'id': tr.pipeline_section_id
+                        }
+                    )
+
+
+            def resolved_for_pipeline(pls, transactions):
+                account_ids = set(r.transaction_party_id for r in transactions)
+
+                accounts = pls.transaction_party_queryset().filter(
+                    pk__in=account_ids
+                )
+                account_ix = {acct.pk: acct for acct in accounts}
+                for rt in transactions:
+                    yield account_ix[rt.transaction_party_id], rt
+
+            self.resolved = [
+                list(resolved_for_pipeline(*t))
+                for t in zip(self.pipeline_section_classes, by_section)
+            ]
+
+    def run(self):
+        """
+        Runs the resolution part of the pipeline.
+        """
+        if self.resolved is not None:
+            return
+        self.resolved = [
+            list(p.resolve(self.parser.parsed_data))
+            for p in self.pipeline_sections
+        ]
+
+    def review(self):
+        for res, p in zip(self.resolved, self.pipeline_sections):
+            p.review(res)
+
+    def commit(self):
+        for res, p in zip(self.resolved, self.pipeline_sections):
+            p.commit(res)
 
 
 class FinancialCSVUploadForm(CSVUploadForm):
-    ledger_preparator_classes = ()
+    pipeline_class: Type[PaymentPipeline]
     upload_field_label = None
     csv_parser_class = None
 
@@ -682,18 +1076,22 @@ class FinancialCSVUploadForm(CSVUploadForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['csv'].label = self.upload_field_label
-    
-    @cached_property
-    def formset_preparators(self) -> List[LedgerEntryPreparator]:
-        data = self.cleaned_data['csv']
-        return [prep(data) for prep in self.ledger_preparator_classes]
 
     # is the most common use case
     @property
-    def formset_preparator(self):
+    def ledger_preparator(self):
         assert len(self.ledger_preparator_classes) == 1
-        return self.formset_preparators[0]
- 
+        return self.ledger_preparators[0]
+
+    def review(self) -> List[ResolvedTransaction]:
+        parser: FinancialCSVParser = self.cleaned_data['csv']
+        pipeline = self.pipeline_class(parser)
+        pipeline.review()
+        assert pipeline.resolved is not None
+        return list(
+            chain(*(res for tp, res in pipeline.resolved))
+        )
+
     def render_confirmation_page(self, request, context=None):
         raise NotImplementedError
 
@@ -719,101 +1117,3 @@ class FinancialCSVUploadForm(CSVUploadForm):
         with db_transaction.atomic():
             for formset in formsets:
                 formset.save()
-
-
-class BaseCreditApportionmentFormset(forms.BaseModelFormSet):
-    transaction_party_model: Type[TransactionPartyMixin] = None
-
-    def prepare_payment_instances(self) -> Tuple[
-        Iterable[int], Iterable[accounting_base.BasePaymentRecord]
-    ]:
-        raise NotImplementedError
-
-    def generate_splits(self, account) -> Generator[
-        BaseDebtPaymentSplit, None, ApportionmentResult
-    ]:
-        raise NotImplementedError
-
-    def post_debt_update(self, fully_paid_debts, remaining_debts):
-        pass
-
-    @property
-    def refund_credit_gnucash_account(self):
-        return None
-
-    def save(self, commit=True):
-        from django.db import connection
-        can_bulk_save = connection.features.can_return_ids_from_bulk_insert
-        global_results = ApportionmentResult()
-        account_pks, all_payments = self.prepare_payment_instances()
-
-        account_qs = self.transaction_party_model.objects.filter(
-            pk__in=account_pks
-        ).with_debt_annotations()
-        refund_category = self.refund_credit_gnucash_account
-        autogenerate_refunds = refund_category is not None
-        debt_account_field = self.transaction_party_model.get_debt_remote_fk()
-        payment_model = self.transaction_party_model.get_payment_model()
-        debt_model = self.transaction_party_model.get_debt_model()
-
-        # save payments before building splits, otherwise the ORM
-        # will not set fk's correctly
-        if commit:
-            if can_bulk_save:
-                payment_model.objects.bulk_create(all_payments)
-            else:
-                logger.debug(
-                    'Database does not support RETURNING on bulk inserts. '
-                    'Fall back to saving in a loop.'
-                )
-                for payment in all_payments:
-                    payment.save()
-
-        def splits_to_create() -> Iterator[BaseDebtPaymentSplit]:
-            nonlocal global_results
-            refunds_to_save = []
-            refund_splits_to_save = []
-
-            for account in account_qs:
-                results = yield from self.generate_splits(account)
-                global_results += results
-
-                if autogenerate_refunds:
-                    debt_kwargs = {
-                        'gnucash_category': refund_category,
-                        debt_account_field: account
-                    }
-                    refund_data = refund_overpayment(
-                        results.remaining_payments,
-                        debt_kwargs=debt_kwargs
-                    )
-                    # we cannot yield from the refund splits here
-                    # since the refund object hasn't been saved yet
-                    if refund_data is not None:
-                        refund_object, refund_splits = refund_data
-                        if can_bulk_save:
-                            refunds_to_save.append(refund_object)
-                            refund_splits_to_save.append(refund_splits)
-                        else:
-                            if commit:
-                                refund_object.save()
-                            yield from refund_splits
-            if can_bulk_save:
-                # save all refund objects and create/yield all refund splits
-                if commit:
-                    debt_model.objects.bulk_create(refunds_to_save)
-                for splits in refund_splits_to_save:
-                    yield from splits
-
-        if commit:
-            self.transaction_party_model.get_split_model().objects.bulk_create(
-                splits_to_create()
-            )
-
-        # allow subclasses to hook into the ApportionmentResults
-        self.post_debt_update(
-            fully_paid_debts=global_results.fully_paid_debts,
-            remaining_debts=global_results.remaining_debts
-        )
-
-        return all_payments

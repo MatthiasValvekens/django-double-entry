@@ -1,7 +1,7 @@
 import datetime
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TypeVar, Generic, ClassVar, Type, Tuple
 
 from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
@@ -11,32 +11,22 @@ from double_entry.utils import (
     _dt_fallback, parse_amount, NegativeAmountError,
     OGM_REGEX, parse_ogm, ogm_from_prefix, CIDictReader,
 )
-from double_entry import models
 
-class FinancialCSVParser:
+@dataclass
+class TransactionInfo:
+    line_no: int
+    amount: Money
+    timestamp: datetime.datetime
+    account_lookup_str: str
+
+TI = TypeVar('TI', bound=TransactionInfo)
+
+class FinancialCSVParser(Generic[TI]):
+    transaction_info_class: ClassVar[Type[TI]]
     delimiter = ','
     amount_column_name = 'bedrag'
     date_column_name= 'datum'
     dt_fallback_with_max = True
-
-    @dataclass
-    class TransactionInfo:
-        line_no: int
-        amount: Money
-        timestamp: datetime.datetime
-        account_lookup_str: str
-
-        @property
-        def ledger_entry(self) -> models.DoubleBookModel:
-            ledger_entry: Optional[models.DoubleBookModel]
-            try:
-                return self._ledger_entry
-            except AttributeError:
-                raise ValueError('Ledger entry not initialised yet')
-
-        @ledger_entry.setter
-        def ledger_entry(self, ledger_entry: models.DoubleBookModel):
-            self._ledger_entry = ledger_entry
 
     def __init__(self, csv_file):
         self.csv_file = csv_file
@@ -44,16 +34,16 @@ class FinancialCSVParser:
         self._errors = []
         self._objects = []
 
-    def error(self, line_no, msg):
+    def error(self, line_no: int, msg: str):
         self._errors.insert(0, (line_no, msg))
 
-    def parse_row(self, line_no, row):
+    def parse_row(self, line_no: int, row: dict) -> Optional[TI]:
         kwargs = self.parse_row_to_dict(line_no, row)
         if kwargs is None:
             return None
-        return self.__class__.TransactionInfo(**kwargs)
+        return self.__class__.transaction_info_class(**kwargs)
 
-    def parse_row_to_dict(self, line_no, row):
+    def parse_row_to_dict(self, line_no: int, row: dict) -> Optional[dict]:
         amount = self._parse_amount(
             line_no, row[self.amount_column_name]
         )
@@ -110,7 +100,7 @@ class FinancialCSVParser:
             )
         self._file_read = True
 
-    def _parse_amount(self, line_no, amount_str):
+    def _parse_amount(self, line_no: int, amount_str: str):
         try:
             return parse_amount(amount_str)
         except NegativeAmountError:
@@ -127,7 +117,7 @@ class FinancialCSVParser:
             )
             return None
 
-    def _parse_date(self, line_no, date_str):
+    def _parse_date(self, line_no: int, date_str: str):
         try:
             return datetime.datetime.strptime(
                 date_str, '%d/%m/%Y'
@@ -145,7 +135,7 @@ class FinancialCSVParser:
 class AccountColumnTransactionParser(FinancialCSVParser):
     account_column_name = 'account'
 
-    def parse_row_to_dict(self, line_no, row):
+    def parse_row_to_dict(self, line_no, row) -> Optional[dict]:
         parsed = super().parse_row_to_dict(line_no, row)
         if parsed is None:
             return None
@@ -156,17 +146,30 @@ class BankCSVParser(FinancialCSVParser):
 
     verbose_name = None
 
-    def get_ogm(self, line_no, row):
+    def get_ogm(self, line_no: int, row: dict) -> Optional[Tuple[str, bool]]:
         raise NotImplementedError
 
     def parse_row_to_dict(self, line_no, row):
         parsed = super().parse_row_to_dict(line_no, row)
         if parsed is None:
             return None
-        ogm = self.get_ogm(line_no, row)
-        if ogm is None:
+        ogm_result = self.get_ogm(line_no, row)
+        if ogm_result is None:
             return None
-        parsed['account_lookup_str'] = ogm
+        ogm_str, heuristic = ogm_result
+        try:
+            prefix, modulus = parse_ogm(ogm_str, validate=True)
+        except (ValueError, TypeError):
+            # not much point in generating an error if the candidate OGM was
+            # nicked from an unstructured field
+            if not heuristic:
+                self.error(
+                    line_no, _('Illegal OGM string %(ogm)s.') % {
+                        'ogm': ogm_str
+                    }
+                )
+            return None
+        parsed['account_lookup_str'] = ogm_from_prefix(prefix)
         return parsed
 
 
@@ -182,24 +185,11 @@ class FortisCSVParser(BankCSVParser):
     date_column_name = 'Uitvoeringsdatum'
     verbose_name = _('Fortis .csv parser')
 
-    def get_ogm(self, line_no, row):
+    def get_ogm(self, line_no, row) -> Optional[Tuple[str, bool]]:
         m = FORTIS_SEARCH_PATTERN.search(row['Details'])
         if m is None:
             return None
-        ogm_str = m.group(0)
-        try:
-            prefix, modulus = parse_ogm(ogm_str, match=m)
-        except (ValueError, TypeError):
-            self.error(
-                line_no,
-                _('Illegal OGM string %(ogm)s.') % {
-                    'ogm': ogm_str
-                }
-            )
-            return None
-
-        ogm_canonical = ogm_from_prefix(prefix)
-        return ogm_canonical
+        return m.group(0)
 
 
 class KBCCSVParser(BankCSVParser):
@@ -223,22 +213,7 @@ class KBCCSVParser(BankCSVParser):
             heuristic_ogm = True
         else:
             heuristic_ogm = False
-        try:
-            prefix, modulus = parse_ogm(ogm_str)
-        except (ValueError, TypeError):
-            # not much point in generating an error if the candidate OGM was
-            # nicked from an unstructured field
-            if not heuristic_ogm:
-                self.error(
-                    line_no,
-                    _('Illegal OGM string %(ogm)s.') % {
-                        'ogm': ogm_str
-                    }
-                )
-            return None
 
-        ogm_canonical = ogm_from_prefix(prefix)
-        return ogm_canonical
-
+        return (ogm_str, heuristic_ogm) if ogm_str else None
 
 BANK_TRANSFER_PARSER_REGISTRY = [FortisCSVParser, KBCCSVParser]

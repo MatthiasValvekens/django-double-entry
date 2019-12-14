@@ -1,0 +1,8 @@
+{% load i18n bootstrap4 transaction_formatting %}
+<tr class="resolved-transaction" {{ transaction|rt_html_tags }}>
+    {% block columns %}
+    <td>{{ transaction.transaction_party_str }}</td>
+    <td>{{ transaction.amount }}</td>
+    <td>{{ form.timestamp.value }}</td>
+    {% endblock %}
+</tr>

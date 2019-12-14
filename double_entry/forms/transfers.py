@@ -1,12 +1,12 @@
 import logging
-from typing import Iterable
+from collections import defaultdict
+from typing import Dict, TypeVar, Optional
 
-from django.utils.functional import cached_property
-from django.utils.translation import (
-    ugettext_lazy as _, ugettext,
-)
+from django.utils.translation import ugettext_lazy as _
 
 import double_entry.utils
+from double_entry import models
+from double_entry.forms.csv import TransactionInfo
 from double_entry.models import TransactionPartyMixin
 from double_entry.forms import bulk_utils
 
@@ -17,16 +17,26 @@ logger = logging.getLogger(__name__)
 # TODO: delimiter autodetection
 
 
-# lookbehind doesn't work, since we don't want to constrain the
-# prefix to a fixed length
+TP = TypeVar('TP', bound=TransactionPartyMixin)
+TI = TypeVar('TI', bound=TransactionInfo)
+RT = TypeVar('RT', bound=bulk_utils.ResolvedTransaction)
+LE = TypeVar('LE', bound=models.DoubleBookModel)
 
-class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
+class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder[TP]):
+    prefix_digit: int
 
-    prefix_digit = None
-
-    def __init__(self, ledger_preparator, prefix_digit):
-        super().__init__(ledger_preparator)
+    def __init__(self, resolver: bulk_utils.LedgerResolver, prefix_digit: int):
+        self.account_index: Dict[str, TP] = {}
+        self.line_index = defaultdict(list)
         self.prefix_digit = prefix_digit
+        super().__init__(resolver)
+
+    def lookup(self, account_lookup_str: str) -> Optional[TP]:
+        try:
+            double_entry.utils.normalise_ogm(account_lookup_str)
+        except ValueError:
+            return None
+        return self.account_index.get(account_lookup_str)
 
     @classmethod
     def lookup_key_for_account(cls, account):
@@ -44,16 +54,16 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
         if not self.ogm_applies(string):
             return False
         else:
-            self.transaction_index[string].append(tinfo)
+            self.line_index[string].append(tinfo.line_no)
             return True
 
     def base_query_set(self):
-        return self.ledger_preparator.transaction_party_model \
+        return self.resolver.transaction_party_model \
             ._default_manager.with_debts_and_payments()
 
-    def execute_query(self) -> Iterable[TransactionPartyMixin]:
+    def execute_query(self):
         account_qs, unseen = self.base_query_set().by_payment_tracking_nos(
-            self.transaction_index.keys(), validate_unseen=True
+            self.line_index.keys(), validate_unseen=True
         )
 
         # We don't show this error in the interface, since
@@ -61,24 +71,29 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder):
         # it probably simply corresponds to a transaction that we don't
         # care about
         if unseen:
-            logger.debug(
+            logger.info(
                 'OGMs not corresponding to valid user records: %s.',
                 ', '.join(unseen)
             )
-        return account_qs
+        for m in account_qs:
+            self.account_index[m.payment_tracking_no] = m
 
 
-class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin,
-                                bulk_utils.DuplicationProtectedPreparator):
+class TransferResolver(bulk_utils.LedgerResolver[TP, TI, RT]):
+    prefix_digit: int
 
-    prefix_digit = None
-
-    def get_lookup_builders(self):
+    def get_index_builders(self):
         return [
             TransferTransactionIndexBuilder(
                 self, prefix_digit=self.prefix_digit
             )
         ]
+
+
+class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin[LE, TP, RT],
+                                bulk_utils.DuplicationProtectedPreparator[LE, TP, RT]):
+
+    prefix_digit = None
 
     multiple_dup_message = _(
         'A bank transfer payment by %(account)s '
@@ -97,8 +112,3 @@ class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin,
 
     # unreadable payment references should be skipped silently
     unparseable_account_message = None
-
-    def form_kwargs_for_transaction(self, transaction):
-        kwargs = super().form_kwargs_for_transaction(transaction)
-        kwargs['ogm'] = transaction.account_lookup_str
-        return kwargs
