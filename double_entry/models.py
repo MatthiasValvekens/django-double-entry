@@ -826,6 +826,7 @@ class TransactionPartyQuerySet(models.QuerySet):
 
 # TODO: auto-enforce equality of transaction parties accross debt/payment splits
 #  through reflection
+# TODO: auto-detect DEBTS_RELATION/PAYMENTS_RELATION
 class TransactionPartyMixin(models.Model):
 
     PAYMENT_TRACKING_PREFIX = None
