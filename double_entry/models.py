@@ -769,7 +769,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # this does NOT compute the debt balance/member annotation
         return self.prefetch_related(
             Prefetch(
-                self.model.DEBTS_RELATION,
+                self.model._debts_relation_name,
                 queryset=self.model.get_debt_model().objects.with_payments()
             )
         )
@@ -778,7 +778,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # annotate payments relation (for symmetry)
         return self.prefetch_related(
             Prefetch(
-                self.model.PAYMENTS_RELATION,
+                self.model._payments_relation_name,
                 queryset=self.model.get_payment_model().objects.with_debts()
             )
         )
@@ -826,15 +826,14 @@ class TransactionPartyQuerySet(models.QuerySet):
 
 # TODO: auto-enforce equality of transaction parties accross debt/payment splits
 #  through reflection
-# TODO: auto-detect DEBTS_RELATION/PAYMENTS_RELATION
 class TransactionPartyMixin(models.Model):
 
     PAYMENT_TRACKING_PREFIX = None
-    DEBTS_RELATION = 'debts'
-    PAYMENTS_RELATION = 'payments'
     _debt_model: Type[BaseDebtRecord] = None
     _payment_model: Type[BasePaymentRecord] = None
     _split_model: Type[BaseDebtPaymentSplit] = None
+    _debts_relation_name: str = None
+    _payments_relation_name: str = None
     _debt_remote_fk: str = None
     _payment_remote_fk: str = None
     _debt_remote_fk_column: str = None
@@ -857,10 +856,48 @@ class TransactionPartyMixin(models.Model):
 
     @classmethod
     def _annotate_model_metadata(cls):
+        def is_candidate(field, *, is_payment: bool):
+            base_class = BasePaymentRecord if is_payment else BaseDebtRecord
+            # we're only interested in many2one fields
+            if not isinstance(field, ManyToOneRel):
+                return False
+            remote_model = field.remote_field.model
+            return issubclass(remote_model, base_class)
+
         if cls._debt_model is not None:
             return
-        debts_f = cls._meta.get_field(cls.DEBTS_RELATION)
-        payments_f = cls._meta.get_field(cls.PAYMENTS_RELATION)
+
+        fields = cls._meta.get_fields()
+        if cls._debts_relation_name is None:
+            debt_fields = [
+                f for f in fields if is_candidate(f, is_payment=False)
+            ]
+            if not debt_fields:
+                raise TypeError('No candidate for debts relation')
+            elif len(debt_fields) > 1:
+                raise TypeError(
+                    'Too many candidates for debts relation. '
+                    'Please set _debts_relation_name'
+                )
+            debts_f = debt_fields[0]
+            cls._debts_relation_name = debts_f.name
+        else:
+            debts_f = cls._meta.get_field(cls._debts_relation_name)
+        if cls._payments_relation_name is None:
+            payment_fields = [
+                f for f in fields if is_candidate(f, is_payment=True)
+            ]
+            if not payment_fields:
+                raise TypeError('No candidate for payments relation')
+            elif len(payment_fields) > 1:
+                raise TypeError(
+                    'Too many candidates for payments relation. '
+                    'Please set _payments_relation_name'
+                )
+            payments_f = payment_fields[0]
+            cls._payments_relation_name = payments_f.name
+        else:
+            payments_f = cls._meta.get_field(cls._payments_relation_name)
         cls._debt_model = debts_f.related_model
         cls._payment_model = payments_f.related_model
         if not issubclass(cls._debt_model, BaseDebtRecord):
@@ -954,7 +991,7 @@ class TransactionPartyMixin(models.Model):
             # TODO: can we detect prefetched relations easily?
             cls = self.__class__
             return sum(
-                (d.balance for d in getattr(self, cls.DEBTS_RELATION).all()),
+                (d.balance for d in getattr(self, cls._debts_relation_name).all()),
                 Money(0, settings.BOOKKEEPING_CURRENCY)
             )
 
@@ -963,7 +1000,7 @@ class TransactionPartyMixin(models.Model):
         # see above
         cls = self.__class__
         return sum(
-            (d.amount_paid for d in getattr(self, cls.DEBTS_RELATION).all()),
+            (d.amount_paid for d in getattr(self, cls._debts_relation_name).all()),
             Money(0, settings.BOOKKEEPING_CURRENCY)
         )
 
@@ -972,7 +1009,7 @@ class TransactionPartyMixin(models.Model):
         # this one needs with_payment_annotations to be efficient
         cls = self.__class__
         return sum(
-            (d.total_amount for d in getattr(self, cls.PAYMENTS_RELATION).all()),
+            (d.total_amount for d in getattr(self, cls._payments_relation_name).all()),
             Money(0, settings.BOOKKEEPING_CURRENCY)
         )
 
