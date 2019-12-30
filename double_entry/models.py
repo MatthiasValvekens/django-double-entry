@@ -862,21 +862,23 @@ class TransactionPartyMixin(models.Model):
 
     @classmethod
     def _annotate_model_metadata(cls):
+        fields = cls._meta.get_fields()
+        m2one_fields = [f for f in fields if isinstance(f, ManyToOneRel)]
+        m2one_models = set(f.remote_field.model for f in m2one_fields)
         def is_candidate(field, *, is_payment: bool):
             base_class = BasePaymentRecord if is_payment else BaseDebtRecord
-            # we're only interested in many2one fields
-            if not isinstance(field, ManyToOneRel):
-                return False
             remote_model = field.remote_field.model
-            return issubclass(remote_model, base_class)
+            if not issubclass(remote_model, base_class):
+                return False
+            other_half = remote_model.get_other_half_model()
+            return other_half in m2one_models
 
         if cls._debt_model is not None:
             return
 
-        fields = cls._meta.get_fields()
         if cls.debts_manager_name is None:
             debt_fields = [
-                f for f in fields if is_candidate(f, is_payment=False)
+                f for f in m2one_fields if is_candidate(f, is_payment=False)
             ]
             if not debt_fields:
                 raise TypeError('No candidate for debts relation')
@@ -891,7 +893,7 @@ class TransactionPartyMixin(models.Model):
             debts_f = cls._meta.get_field(cls.debts_manager_name)
         if cls.payments_manager_name is None:
             payment_fields = [
-                f for f in fields if is_candidate(f, is_payment=True)
+                f for f in m2one_fields if is_candidate(f, is_payment=True)
             ]
             if not payment_fields:
                 raise TypeError('No candidate for payments relation')
