@@ -546,7 +546,7 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
         return {
             'date': signature_used.date,
             'amount': Money(
-                signature_used.amount, settings.BOOKKEEPING_CURRENCY
+                signature_used.amount, settings.DEFAULT_CURRENCY
             ),
         }
 
@@ -836,13 +836,12 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
         splits, results = consume_with_result(split_generator)
 
         total_used = sum(
-            (s.amount for s in splits),
-            Money(0, settings.BOOKKEEPING_CURRENCY)
+            (s.amount for s in splits), Money(0, settings.DEFAULT_CURRENCY)
         )
 
         total_credit = sum(
             (p.total_amount for p in payments),
-            Money(0, settings.BOOKKEEPING_CURRENCY)
+            Money(0, settings.DEFAULT_CURRENCY)
         )
 
         if total_used < total_credit:

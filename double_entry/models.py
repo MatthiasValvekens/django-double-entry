@@ -358,9 +358,8 @@ class ConcreteAmountMixin(models.Model):
 
     total_amount = MoneyField(
         verbose_name=_('total amount'),
-        decimal_places=2,
-        max_digits=6,
-        default_currency=settings.BOOKKEEPING_CURRENCY,
+        decimal_places=getattr(settings, 'CURRENCY_DECIMAL_PLACES', 4),
+        max_digits=getattr(settings, 'CURRENCY_MAX_DIGITS', 19),
         validators=[nonzero_money_validator]
     )
 
@@ -644,9 +643,8 @@ class BaseTransactionSplit(models.Model):
 
     amount = MoneyField(
         verbose_name=_('amount'),
-        decimal_places=2,
-        max_digits=6,
-        default_currency=settings.BOOKKEEPING_CURRENCY,
+        decimal_places=getattr(settings, 'CURRENCY_DECIMAL_PLACES', 4),
+        max_digits=getattr(settings, 'CURRENCY_MAX_DIGITS', 19),
         validators=[nonzero_money_validator]
     )
     
@@ -998,9 +996,10 @@ class TransactionPartyMixin(models.Model):
             # with_debt_annotations, otherwise RIP DB
             # TODO: can we detect prefetched relations easily?
             cls = self.__class__
+            # TODO: can we do better than falling back on settings.DEFAULT_CURRENCY?
             return sum(
                 (d.balance for d in getattr(self, cls.debts_manager_name).all()),
-                Money(0, settings.BOOKKEEPING_CURRENCY)
+                Money(0, settings.DEFAULT_CURRENCY)
             )
 
     @cached_property
@@ -1009,7 +1008,7 @@ class TransactionPartyMixin(models.Model):
         cls = self.__class__
         return sum(
             (d.amount_paid for d in getattr(self, cls.debts_manager_name).all()),
-            Money(0, settings.BOOKKEEPING_CURRENCY)
+            Money(0, settings.DEFAULT_CURRENCY)
         )
 
     @cached_property
@@ -1018,7 +1017,7 @@ class TransactionPartyMixin(models.Model):
         cls = self.__class__
         return sum(
             (d.total_amount for d in getattr(self, cls.payments_manager_name).all()),
-            Money(0, settings.BOOKKEEPING_CURRENCY)
+            Money(0, settings.DEFAULT_CURRENCY)
         )
 
     @cached_property

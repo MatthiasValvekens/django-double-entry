@@ -141,7 +141,7 @@ SEARCH_PATTERN = re.compile(OGM_REGEX)
 
 def decimal_to_money(d, currency=None):
     if currency is None:
-        currency = settings.BOOKKEEPING_CURRENCY
+        currency = settings.DEFAULT_CURRENCY
     return Money(
         amount=d.quantize(Decimal('.01')),
         currency=currency
@@ -278,7 +278,7 @@ def parse_amount(amount_str: str, raw_decimal=False):
 
     if raw_decimal:
         return rd
-    currency = settings.BOOKKEEPING_CURRENCY
+    currency = settings.DEFAULT_CURRENCY
     if rd <= 0:
         raise NegativeAmountError
     return Money(rd, currency)
