@@ -103,7 +103,7 @@ class DoubleBookInterface(models.Model):
         'but attempted to match %(amount)s.'
     )
 
-    _split_manager_name = None
+    split_manager_name = None
     _split_model = None
     _remote_target_field = None
     _other_half_model = None
@@ -115,6 +115,11 @@ class DoubleBookInterface(models.Model):
     class Meta:
         abstract = True
 
+    # We cannot use __init_subclas__ since we need access to the app's model
+    #  registry, which isn't avaiable at that point
+    # TODO: figure out if we can hook into the app registry preparation to
+    #  call this method at some fixed point in the process, so we don't have
+    #  to deal with ensuring it gets called in all accessor methods
     @classmethod
     def _prepare_split_metadata(cls):
         """
@@ -143,26 +148,29 @@ class DoubleBookInterface(models.Model):
                 set(f.related_model for f in remote_fks)
             )
             return doublebook_fk_count == doublebook_fk_model_count == 2
-           
-        candidates = [
-            f for f in cls._meta.get_fields() if is_candidate(f)
-        ]
-        if not candidates:
-            raise TypeError(
-                'There are no possible split fields on this '
-                'DoubleBookModel.'
-            )
-        elif len(candidates) > 1:
-            raise TypeError(
-                'There are too many possible split fields on this '
-                'DoubleBookModel: %s.' % (
-                    ', '.join(f.name for f in candidates)
-                )
-            )
 
-        split_rel = candidates[0]
+        if cls.split_manager_name is None:
+            candidates = [
+                f for f in cls._meta.get_fields() if is_candidate(f)
+            ]
+            if not candidates:
+                raise TypeError(
+                    'There are no possible split fields on this '
+                    'DoubleBookModel.'
+                )
+            elif len(candidates) > 1:
+                raise TypeError(
+                    'There are too many possible split fields on this '
+                    'DoubleBookModel: %s. Please set split_manager_name' % (
+                        ', '.join(f.name for f in candidates)
+                    )
+                )
+            split_rel = candidates[0]
+            cls.split_manager_name = split_rel.name
+        else:
+            split_rel = cls._meta.get_field(cls.split_manager_name)
+
         cls._split_model = split_rel.related_model
-        cls._split_manager_name = split_rel.name
         cls._remote_target_field = split_rel.remote_field.name
         
         # the is_candidate condition guarantees that this works
@@ -187,9 +195,9 @@ class DoubleBookInterface(models.Model):
     @property
     def split_manager(self):
         cls = self.__class__
-        if cls._split_manager_name is None:
+        if cls.split_manager_name is None:
             cls._prepare_split_metadata()
-        return getattr(self, cls._split_manager_name)
+        return getattr(self, cls.split_manager_name)
 
     @cached_property
     def matched_balance(self):
@@ -769,7 +777,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # this does NOT compute the debt balance/member annotation
         return self.prefetch_related(
             Prefetch(
-                self.model._debts_relation_name,
+                self.model.debts_manager_name,
                 queryset=self.model.get_debt_model().objects.with_payments()
             )
         )
@@ -778,7 +786,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # annotate payments relation (for symmetry)
         return self.prefetch_related(
             Prefetch(
-                self.model._payments_relation_name,
+                self.model.payments_manager_name,
                 queryset=self.model.get_payment_model().objects.with_debts()
             )
         )
@@ -832,8 +840,8 @@ class TransactionPartyMixin(models.Model):
     _debt_model: Type[BaseDebtRecord] = None
     _payment_model: Type[BasePaymentRecord] = None
     _split_model: Type[BaseDebtPaymentSplit] = None
-    _debts_relation_name: str = None
-    _payments_relation_name: str = None
+    debts_manager_name: str = None
+    payments_manager_name: str = None
     _debt_remote_fk: str = None
     _payment_remote_fk: str = None
     _debt_remote_fk_column: str = None
@@ -868,7 +876,7 @@ class TransactionPartyMixin(models.Model):
             return
 
         fields = cls._meta.get_fields()
-        if cls._debts_relation_name is None:
+        if cls.debts_manager_name is None:
             debt_fields = [
                 f for f in fields if is_candidate(f, is_payment=False)
             ]
@@ -877,13 +885,13 @@ class TransactionPartyMixin(models.Model):
             elif len(debt_fields) > 1:
                 raise TypeError(
                     'Too many candidates for debts relation. '
-                    'Please set _debts_relation_name'
+                    'Please set debts_manager_name'
                 )
             debts_f = debt_fields[0]
-            cls._debts_relation_name = debts_f.name
+            cls.debts_manager_name = debts_f.name
         else:
-            debts_f = cls._meta.get_field(cls._debts_relation_name)
-        if cls._payments_relation_name is None:
+            debts_f = cls._meta.get_field(cls.debts_manager_name)
+        if cls.payments_manager_name is None:
             payment_fields = [
                 f for f in fields if is_candidate(f, is_payment=True)
             ]
@@ -892,12 +900,12 @@ class TransactionPartyMixin(models.Model):
             elif len(payment_fields) > 1:
                 raise TypeError(
                     'Too many candidates for payments relation. '
-                    'Please set _payments_relation_name'
+                    'Please set payments_manager_name'
                 )
             payments_f = payment_fields[0]
-            cls._payments_relation_name = payments_f.name
+            cls.payments_manager_name = payments_f.name
         else:
-            payments_f = cls._meta.get_field(cls._payments_relation_name)
+            payments_f = cls._meta.get_field(cls.payments_manager_name)
         cls._debt_model = debts_f.related_model
         cls._payment_model = payments_f.related_model
         if not issubclass(cls._debt_model, BaseDebtRecord):
@@ -991,7 +999,7 @@ class TransactionPartyMixin(models.Model):
             # TODO: can we detect prefetched relations easily?
             cls = self.__class__
             return sum(
-                (d.balance for d in getattr(self, cls._debts_relation_name).all()),
+                (d.balance for d in getattr(self, cls.debts_manager_name).all()),
                 Money(0, settings.BOOKKEEPING_CURRENCY)
             )
 
@@ -1000,7 +1008,7 @@ class TransactionPartyMixin(models.Model):
         # see above
         cls = self.__class__
         return sum(
-            (d.amount_paid for d in getattr(self, cls._debts_relation_name).all()),
+            (d.amount_paid for d in getattr(self, cls.debts_manager_name).all()),
             Money(0, settings.BOOKKEEPING_CURRENCY)
         )
 
@@ -1009,7 +1017,7 @@ class TransactionPartyMixin(models.Model):
         # this one needs with_payment_annotations to be efficient
         cls = self.__class__
         return sum(
-            (d.total_amount for d in getattr(self, cls._payments_relation_name).all()),
+            (d.total_amount for d in getattr(self, cls.payments_manager_name).all()),
             Money(0, settings.BOOKKEEPING_CURRENCY)
         )
 

@@ -27,11 +27,11 @@ class TestSimpleMagic(TestCase):
     def test_split_manager_link(self):
         # TODO: need instances to test public API
         self.assertEqual(
-            models.SimpleCustomerDebt._split_manager_name, 'debt_splits'
+            models.SimpleCustomerDebt.split_manager_name, 'debt_splits'
         )
 
         self.assertEqual(
-            models.SimpleCustomerPayment._split_manager_name, 'payment_splits'
+            models.SimpleCustomerPayment.split_manager_name, 'payment_splits'
         )
 
     def test_customer_ledger_links(self):
