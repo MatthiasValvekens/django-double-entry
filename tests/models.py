@@ -5,14 +5,14 @@ from double_entry import models as base
 class SimpleCustomer(base.TransactionPartyMixin):
     name = models.CharField(max_length=100)
 
-class SimpleCustomerDebt(base.BaseDebtRecord):
+class SimpleCustomerDebt(base.BaseDebtRecord, base.ConcreteAmountMixin):
     # give different names for more meaningful testing
     debtor = models.ForeignKey(
         SimpleCustomer, on_delete=models.CASCADE,
         related_name='debts'
     )
 
-class SimpleCustomerPayment(base.BasePaymentRecord):
+class SimpleCustomerPayment(base.BasePaymentRecord, base.ConcreteAmountMixin):
     creditor = models.ForeignKey(
         SimpleCustomer, on_delete=models.CASCADE,
         related_name='payments'
