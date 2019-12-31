@@ -87,11 +87,16 @@ class Reservation(ReservationDebt):
         related_name='reservation', parent_link=True
     )
 
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE,
+        related_name='reservations'
+    )
+
     # see if the magic is smart enough to recognise that this FK is NOT
     # the one needed by the ledger management code
     referred_by = models.ForeignKey(
         SimpleCustomer, on_delete=models.CASCADE,
-        related_name='referrer'
+        related_name='referrer', null=True
     )
 
 
@@ -99,6 +104,9 @@ class TicketCategory(models.Model):
     price = MoneyField(decimal_places=2, max_digits=6)
 
 class Ticket(models.Model):
+    reservation = models.ForeignKey(
+        Reservation, on_delete=models.CASCADE, related_name='tickets'
+    )
     category = models.ForeignKey(
         TicketCategory, models.CASCADE, related_name='tickets'
     )
