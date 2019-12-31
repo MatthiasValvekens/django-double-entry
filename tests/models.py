@@ -1,9 +1,14 @@
+from decimal import Decimal
+
+from django.conf import settings
 from django.db import models
 from django.db.models import OuterRef, Sum, ExpressionWrapper, F, Subquery
 from django.db.models.functions import Coalesce
 from djmoney.models.fields import MoneyField
+from djmoney.money import Money
 
 from double_entry import models as base
+from double_entry.utils import decimal_to_money
 
 
 class SimpleCustomer(base.TransactionPartyMixin):
@@ -73,6 +78,8 @@ class ReservationDebtQuerySet(base.BaseDebtQuerySet):
 
 
 class ReservationDebt(base.BaseDebtRecord):
+    TOTAL_AMOUNT_FIELD_COLUMN = ReservationDebtQuerySet.TOTAL_PRICE_FIELD
+
     owner = models.ForeignKey(
         TicketCustomer, on_delete=models.CASCADE, related_name='reservations'
     )
@@ -80,6 +87,25 @@ class ReservationDebt(base.BaseDebtRecord):
     static_price = models.DecimalField(
         decimal_places=4, max_digits=19, null=True, blank=True
     )
+
+    objects = ReservationDebtQuerySet.as_manager()
+
+    @property
+    def total_amount(self):
+        if self.static_price is not None:
+            return decimal_to_money(self.static_price)
+        try:
+            return decimal_to_money(
+                getattr(self, ReservationDebtQuerySet.TOTAL_PRICE_FIELD)
+            )
+        except AttributeError:
+            # no prefetch or annotation => database deluge :(
+            # TODO: detect prefetch and warn if not present
+            return sum(
+                (ticket.count * ticket.category.price
+                 for ticket in self.reservation.tickets.all()),
+                Money(Decimal('0.00'), settings.BOOKKEEPING_CURRENCY)
+            )
 
 class Reservation(ReservationDebt):
     debt = models.OneToOneField(
