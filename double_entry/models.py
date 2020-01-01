@@ -748,7 +748,7 @@ class TransactionPartyQuerySet(models.QuerySet):
     def by_payment_tracking_no(self, ogm):
         try:
             pk = parse_transaction_no(
-                ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
+                ogm, prefix_digit=self.model.payment_tracking_prefix
             )
         except ValueError:
             raise self.model.DoesNotExist()
@@ -760,7 +760,7 @@ class TransactionPartyQuerySet(models.QuerySet):
             for ogm in ogms:
                 try:
                     yield parse_transaction_no(
-                        ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
+                        ogm, prefix_digit=self.model.payment_tracking_prefix
                     )
                 except ValueError:
                     continue
@@ -834,7 +834,7 @@ class TransactionPartyQuerySet(models.QuerySet):
 #  through reflection
 class TransactionPartyMixin(models.Model):
 
-    PAYMENT_TRACKING_PREFIX = None
+    payment_tracking_prefix = None
     _debt_model: Type[BaseDebtRecord] = None
     _payment_model: Type[BasePaymentRecord] = None
     _split_model: Type[BaseDebtPaymentSplit] = None
@@ -965,9 +965,14 @@ class TransactionPartyMixin(models.Model):
 
     @classmethod
     def parse_transaction_no(cls, ogm):
-        return parse_transaction_no(ogm, cls.PAYMENT_TRACKING_PREFIX)
+        return parse_transaction_no(ogm, cls.payment_tracking_prefix)
 
     def _payment_tracking_no(self, formatted):
+        type_prefix = self.__class__.payment_tracking_prefix
+        if type_prefix is None:
+            raise TypeError(
+                'Payment tracking prefix not set'
+            )
         # memoryview weirdness forces this
         token_seed = bytes(self.hidden_token)[1]
         raw = int('%07d%02d' % (
@@ -976,7 +981,7 @@ class TransactionPartyMixin(models.Model):
         )
                   )
         obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
-        prefix_str = '%s%09d' % (self.__class__.PAYMENT_TRACKING_PREFIX, obf)
+        prefix_str = '%s%09d' % (type_prefix, obf)
         return ogm_from_prefix(prefix_str, formatted)
 
     @cached_property
