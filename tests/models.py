@@ -125,6 +125,17 @@ class Reservation(ReservationDebt):
         related_name='referrer', null=True
     )
 
+    @property
+    def ticket_face_value(self):
+        # this cannot be None for an actual reservation, since
+        # there must be tickets associated to the reservation
+        # it could be zero, though (in theory)
+        # Nevertheless, we program defensively.
+        face_value = getattr(self, ReservationDebtQuerySet.FACE_VALUE_FIELD)
+        return decimal_to_money(
+            face_value or Decimal('0.00')
+        )
+
 
 class TicketCategory(models.Model):
     price = MoneyField(decimal_places=2, max_digits=6)

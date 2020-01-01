@@ -1,10 +1,12 @@
+from decimal import Decimal
+
 from django.test import TestCase
 from tests import models
 
 FIXTURE_EVENT_PK = 1
 FIXTURE_UNPAID_RESERVATION_PK = 1
 FIXTURE_PERFECT_RESERVATION_PK = 2
-FIXTURE_TOO_MANY_SCANS_PK = 3
+FIXTURE_STATIC_PRICE_PK = 3
 FIXTURE_COMPLEX_PARTIALLY_PAID_PK = 4
 # situation:
 #  reservation 5: 3x cat 1 (12 eur)
@@ -55,4 +57,18 @@ class TestReservationPaymentQueries(TestCase):
         self.assertFalse(r.credit_remaining)
 
 
+    def test_static_price(self):
+        r: models.ReservationDebt = models.ReservationDebt.objects \
+            .with_total_price().with_remote_accounts().get(
+            pk=FIXTURE_STATIC_PRICE_PK
+        )
+        self.assertEquals(r.total_amount.amount, Decimal('7.00'))
+        self.assertFalse(r.balance)
+        r: models.Reservation = models.Reservation.objects \
+            .with_total_price().with_remote_accounts().get(
+            pk=FIXTURE_STATIC_PRICE_PK
+        )
+        self.assertEquals(r.total_amount.amount, Decimal('7.00'))
+        self.assertFalse(r.balance)
+        self.assertEquals(r.ticket_face_value.amount, Decimal('32.00'))
 
