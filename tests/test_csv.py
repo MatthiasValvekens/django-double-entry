@@ -1,3 +1,6 @@
+import datetime
+import pytz
+
 from io import StringIO
 from typing import List
 
@@ -71,4 +74,8 @@ class TestBankCSVs(TestCase):
         for row in rows:
             with self.subTest(line_no=row.line_no):
                 self.assertEqual(row.amount, Money(32, 'EUR'))
-                # TODO: date test
+                self.assertEqual(
+                    row.timestamp, pytz.timezone('Europe/Brussels').localize(
+                        datetime.datetime(2019, 8, 8, 23, 59, 59, 999999)
+                    )
+                )

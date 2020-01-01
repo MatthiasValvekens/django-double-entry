@@ -107,12 +107,12 @@ def qif_response(content, download_name='transactions.qif'):
     return response
 
 
-def _dt_fallback(timestamp, use_max=False):
+def _dt_fallback(timestamp, use_max=False, default_timezone=None):
     if isinstance(timestamp, datetime.datetime):
         if timezone.is_aware(timestamp):
             return timestamp
         else:
-            return timezone.make_aware(timestamp)
+            return timezone.make_aware(timestamp, timezone=default_timezone)
 
     if use_max:
         time_pad = datetime.datetime.max.time()
@@ -122,7 +122,7 @@ def _dt_fallback(timestamp, use_max=False):
     return timezone.make_aware(
         datetime.datetime.combine(
             timestamp, time_pad
-        )
+        ), timezone=default_timezone
     )
 
 

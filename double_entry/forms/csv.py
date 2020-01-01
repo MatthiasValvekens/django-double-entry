@@ -1,5 +1,6 @@
 import datetime
 import re
+import pytz
 from dataclasses import dataclass
 from typing import Optional, TypeVar, Generic, ClassVar, Type, Tuple
 
@@ -26,6 +27,7 @@ class FinancialCSVParser(Generic[TI]):
     delimiter = ','
     amount_column_name = 'bedrag'
     date_column_name= 'datum'
+    timezone = None
     dt_fallback_with_max = True
 
     def __init__(self, csv_file):
@@ -56,7 +58,9 @@ class FinancialCSVParser(Generic[TI]):
         if timestamp is None or amount is None:
             return None
 
-        timestamp = _dt_fallback(timestamp, self.dt_fallback_with_max)
+        timestamp = _dt_fallback(
+            timestamp, self.dt_fallback_with_max, self.timezone
+        )
         return {
             'amount': amount,
             'timestamp': timestamp,
@@ -190,6 +194,7 @@ FORTIS_SEARCH_PATTERN = re.compile(FORTIS_FIND_OGM)
 
 class FortisCSVParser(BankCSVParser):
     delimiter = ';'
+    timezone = pytz.timezone('Europe/Brussels')
 
     # TODO: force all relevant columns to be present here
     amount_column_name = 'Bedrag'
@@ -210,6 +215,7 @@ class KBCCSVParser(BankCSVParser):
     # csv headers are now parsed case-insensitively)
     delimiter = ';'
     verbose_name = _('KBC .csv parser')
+    timezone = pytz.timezone('Europe/Brussels')
 
     # we're using this for incoming transactions, so this is fine
     amount_column_name = 'credit'
