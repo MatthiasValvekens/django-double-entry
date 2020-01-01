@@ -671,6 +671,8 @@ class BaseTransactionSplit(models.Model):
 
 
 class BaseDebtPaymentSplit(BaseTransactionSplit):
+    strictly_enforce_timestamps = False
+
     _pmt_column_name = None
     _debt_column_name = None
 
@@ -712,20 +714,16 @@ class BaseDebtPaymentSplit(BaseTransactionSplit):
         cls = self.__class__
         payment = getattr(self, cls.get_payment_column())
         debt = getattr(self, cls.get_debt_column())
-
-        if payment.timestamp < debt.timestamp and not debt.is_refund:
-            def loctimefmt(ts):
-                return timezone.localtime(ts).strftime(
-                    '%Y-%m-%d %H:%M:%S'
-                )
+        strict = self.strictly_enforce_timestamps
+        if strict and payment.timestamp < debt.timestamp and not debt.is_refund:
             raise ValidationError(
                 _(
                     'Payment cannot be applied to future debt. '
                     'Payment is dated %(payment_ts)s, while '
                     'debt is dated %(debt_ts)s.'
                 ) % {
-                    'payment_ts': loctimefmt(payment.timestamp),
-                    'debt_ts': loctimefmt(debt.timestamp)
+                    'payment_ts': payment.timestamp.isoformat(),
+                    'debt_ts': debt.timestamp.isoformat()
                 }
             )
 
