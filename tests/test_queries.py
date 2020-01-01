@@ -1,5 +1,7 @@
+import datetime
 from decimal import Decimal
 
+import pytz
 from django.test import TestCase
 from tests import models
 
@@ -20,29 +22,35 @@ FIXTURE_COMPLEX_SMALL_PAYMENT_PK = 5
 FIXTURE_PAID_TOO_MUCH_PK = 6
 FIXTURE_PAID_TOO_MUCH_AND_TOO_LITTLE = 7
 
-# TODO: test matched dates
 
 class TestSimplePaymentQueries(TestCase):
     fixtures = ['simple.json']
 
     def test_simple_unpaid(self):
         r: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
-            .with_remote_accounts().get(
+            .with_fully_matched_date().get(
             pk=FIXTURE_UNPAID_PK
         )
         self.assertTrue(r.balance)
         self.assertEquals(r.balance, r.total_amount)
+        self.assertEquals(r.fully_matched_date, None)
 
 
     def test_perfect_payment(self):
         r: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
-            .with_remote_accounts().get(
+            .with_fully_matched_date().get(
             pk=FIXTURE_PERFECT_PK
         )
         self.assertFalse(r.balance)
+        self.assertEquals(
+            r.fully_matched_date, datetime.datetime(
+                2019, 8, 8, 0, 15, 0, tzinfo=pytz.utc
+            )
+        )
         r: models.SimpleCustomerPayment = models.SimpleCustomerPayment.objects \
-            .with_remote_accounts().get(pk=FIXTURE_PERFECT_PK)
+            .with_fully_matched_date().get(pk=FIXTURE_PERFECT_PK)
         self.assertFalse(r.credit_remaining)
+
 
 
 class TestReservationPaymentQueries(TestCase):
@@ -50,17 +58,19 @@ class TestReservationPaymentQueries(TestCase):
 
     def test_simple_unpaid_reservation(self):
         r: models.ReservationDebt = models.ReservationDebt.objects \
-            .with_total_price().with_remote_accounts().get(
+            .with_total_price().with_fully_matched_date().get(
             pk=FIXTURE_UNPAID_PK
         )
         self.assertTrue(r.balance)
         self.assertEquals(r.balance, r.total_amount)
+        self.assertEquals(r.fully_matched_date, None)
         r: models.Reservation = models.Reservation.objects \
-            .with_total_price().with_remote_accounts().get(
+            .with_total_price().with_fully_matched_date().get(
             pk=FIXTURE_UNPAID_PK
         )
         self.assertTrue(r.balance)
         self.assertEquals(r.balance, r.total_amount)
+        self.assertEquals(r.fully_matched_date, None)
 
 
     def test_perfect_reservation(self):
@@ -69,6 +79,11 @@ class TestReservationPaymentQueries(TestCase):
                 pk=FIXTURE_PERFECT_PK
             )
         self.assertFalse(r.balance)
+        self.assertEquals(
+            r.fully_matched_date, datetime.datetime(
+                2019, 8, 8, 0, 15, 0, tzinfo=pytz.utc
+            )
+        )
         r: models.Reservation = models.Reservation.objects \
             .with_total_price().with_remote_accounts().get(
                 pk=FIXTURE_PERFECT_PK

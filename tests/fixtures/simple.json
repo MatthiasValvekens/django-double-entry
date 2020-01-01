@@ -4,7 +4,7 @@
     "pk": 1,
     "fields": {
         "hidden_token": "FpT0S901p7U=",
-        "name": "Aspen Robbins"
+        "name": "Asp￿én Robbins"
     }
 },
 {
@@ -69,7 +69,8 @@
     "fields": {
       "debtor_id": 1,
       "total_amount": "32.00",
-      "total_amount_currency": "EUR"
+      "total_amount_currency": "EUR",
+      "timestamp": "2019-08-08T00:30:00+01:00"
     }
   },
   {
@@ -78,7 +79,8 @@
     "fields": {
       "debtor_id": 2,
       "total_amount": "24.00",
-      "total_amount_currency": "EUR"
+      "total_amount_currency": "EUR",
+      "timestamp": "2019-08-08T00:30:00+01:00"
     }
   },
   {
@@ -87,7 +89,8 @@
     "fields": {
       "total_amount": "24.00",
       "total_amount_currency": "EUR",
-      "creditor_id": 2
+      "creditor_id": 2,
+      "timestamp": "2019-08-08T00:15:00+00:00"
     }
   },
   {
@@ -105,7 +108,8 @@
     "fields": {
       "debtor_id": 7,
       "total_amount": "32.00",
-      "total_amount_currency": "EUR"
+      "total_amount_currency": "EUR",
+      "timestamp": "2019-08-08T00:30:00+01:00"
     }
   },
   {
@@ -114,7 +118,8 @@
     "fields": {
       "debtor_id": 5,
       "total_amount": "60.00",
-      "total_amount_currency": "EUR"
+      "total_amount_currency": "EUR",
+      "timestamp": "2019-08-08T00:30:00+01:00"
     }
   },
   {
@@ -123,7 +128,8 @@
     "fields": {
       "debtor_id": 5,
       "total_amount": "12.00",
-      "total_amount_currency": "EUR"
+      "total_amount_currency": "EUR",
+      "timestamp": "2019-08-08T00:30:00+01:00"
     }
   },
   {
@@ -132,7 +138,8 @@
     "fields": {
       "total_amount": "44.00",
       "total_amount_currency": "EUR",
-      "creditor_id": 5
+      "creditor_id": 5,
+      "timestamp": "2019-08-08T00:15:00+00:00"
     }
   },
   {
@@ -159,7 +166,8 @@
     "fields": {
       "total_amount": "18.00",
       "total_amount_currency": "EUR",
-      "creditor_id": 5
+      "creditor_id": 5,
+      "timestamp": "2019-08-08T00:15:00+00:00"
     }
   },
   {
@@ -177,7 +185,8 @@
     "fields": {
       "debtor_id": 4,
       "total_amount": "24.00",
-      "total_amount_currency": "EUR"
+      "total_amount_currency": "EUR",
+      "timestamp": "2019-08-08T00:30:00+01:00"
     }
   },
   {
@@ -204,7 +213,8 @@
     "fields": {
       "debtor_id": 4,
       "total_amount": "30.00",
-      "total_amount_currency": "EUR"
+      "total_amount_currency": "EUR",
+      "timestamp": "2019-08-08T00:30:00+01:00"
     }
   },
   {
@@ -213,7 +223,8 @@
     "fields": {
       "total_amount": "24.00",
       "total_amount_currency": "EUR",
-      "creditor_id": 4
+      "creditor_id": 4,
+      "timestamp": "2019-08-08T00:15:00+00:00"
     }
   },
   {
