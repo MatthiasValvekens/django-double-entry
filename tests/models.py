@@ -12,6 +12,7 @@ from double_entry.utils import decimal_to_money
 
 
 class SimpleCustomer(base.TransactionPartyMixin):
+    payment_tracking_prefix = 1
     name = models.CharField(max_length=100)
 
 class SimpleCustomerDebt(base.BaseDebtRecord, base.ConcreteAmountMixin):
@@ -44,6 +45,7 @@ class Event(models.Model):
     start = models.DateTimeField()
 
 class TicketCustomer(base.TransactionPartyMixin):
+    payment_tracking_prefix = 2
     name = models.CharField(max_length=100)
 
 
