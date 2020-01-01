@@ -1,0 +1,228 @@
+[ 
+{
+    "model": "tests.simplecustomer",
+    "pk": 1,
+    "fields": {
+        "hidden_token": "FpT0S901p7U=",
+        "name": "Aspen Robbins"
+    }
+},
+{
+    "model": "tests.simplecustomer",
+    "pk": 2,
+    "fields": {
+        "hidden_token": "wF8KNzEjxi0=",
+        "name": "Isabelle Mccall"
+    }
+},
+{
+    "model": "tests.simplecustomer",
+    "pk": 3,
+    "fields": {
+        "hidden_token": "LSXgQcr5H/I=",
+        "name": "Kellie Wiggins"
+    }
+},
+{
+    "model": "tests.simplecustomer",
+    "pk": 4,
+    "fields": {
+        "hidden_token": "I4NZjWvSMWw=",
+        "name": "Ignatius Nelson"
+    }
+},
+{
+    "model": "tests.simplecustomer",
+    "pk": 5,
+    "fields": {
+        "hidden_token": "MLxmuiXWwms=",
+        "name": "Portia Singleton"
+    }
+},
+{
+    "model": "tests.simplecustomer",
+    "pk": 5,
+    "fields": {
+        "hidden_token": "NWeg9ATwJto=",
+        "name": "Keiko Ray"
+    }
+},
+{
+    "model": "tests.simplecustomer",
+    "pk": 6,
+    "fields": {
+        "hidden_token": "pLzx3nI4uJk=",
+        "name": "Benedict Petersen"
+    }
+},
+{
+    "model": "tests.simplecustomer",
+    "pk": 7,
+    "fields": {
+        "hidden_token": "dyN/kRTxiOc=",
+        "name": "Benedict Petersen"
+    }
+},
+  {
+    "model": "tests.simplecustomerdebt",
+    "pk": 1,
+    "fields": {
+      "debtor_id": 1,
+      "total_amount": "32.00",
+      "total_amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerdebt",
+    "pk": 2,
+    "fields": {
+      "debtor_id": 2,
+      "total_amount": "24.00",
+      "total_amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerpayment",
+    "pk": 2,
+    "fields": {
+      "total_amount": "24.00",
+      "total_amount_currency": "EUR",
+      "creditor_id": 2
+    }
+  },
+  {
+    "model": "tests.simplecustomerpaymentsplit",
+    "fields": {
+      "payment_id": 2,
+      "debt_id": 2,
+      "amount": "24.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerdebt",
+    "pk": 3,
+    "fields": {
+      "debtor_id": 7,
+      "total_amount": "32.00",
+      "total_amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerdebt",
+    "pk": 4,
+    "fields": {
+      "debtor_id": 5,
+      "total_amount": "60.00",
+      "total_amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerdebt",
+    "pk": 5,
+    "fields": {
+      "debtor_id": 5,
+      "total_amount": "12.00",
+      "total_amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerpayment",
+    "pk": 4,
+    "fields": {
+      "total_amount": "44.00",
+      "total_amount_currency": "EUR",
+      "creditor_id": 5
+    }
+  },
+  {
+    "model": "tests.simplecustomerpaymentsplit",
+    "fields": {
+      "payment_id": 4,
+      "debt_id": 4,
+      "amount": "32.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerpaymentsplit",
+    "fields": {
+      "payment_id": 4,
+      "debt_id": 5,
+      "amount": "12.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerpayment",
+    "pk": 5,
+    "fields": {
+      "total_amount": "18.00",
+      "total_amount_currency": "EUR",
+      "creditor_id": 5
+    }
+  },
+  {
+    "model": "tests.simplecustomerpaymentsplit",
+    "fields": {
+      "payment_id": 5,
+      "debt_id": 4,
+      "amount": "18.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerdebt",
+    "pk": 6,
+    "fields": {
+      "debtor_id": 4,
+      "total_amount": "24.00",
+      "total_amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerpayment",
+    "pk": 6,
+    "fields": {
+      "total_amount": "30.00",
+      "total_amount_currency": "EUR",
+      "creditor_id": 4
+    }
+  },
+  {
+    "model": "tests.simplecustomerpaymentsplit",
+    "fields": {
+      "payment_id": 6,
+      "debt_id": 6,
+      "amount": "24.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerdebt",
+    "pk": 7,
+    "fields": {
+      "debtor_id": 4,
+      "total_amount": "30.00",
+      "total_amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.simplecustomerpayment",
+    "pk": 7,
+    "fields": {
+      "total_amount": "24.00",
+      "total_amount_currency": "EUR",
+      "creditor_id": 4
+    }
+  },
+  {
+    "model": "tests.simplecustomerpaymentsplit",
+    "fields": {
+      "payment_id": 7,
+      "debt_id": 7,
+      "amount": "24.00",
+      "amount_currency": "EUR"
+    }
+  }
+]

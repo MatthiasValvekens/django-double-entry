@@ -4,8 +4,8 @@ from django.test import TestCase
 from tests import models
 
 FIXTURE_EVENT_PK = 1
-FIXTURE_UNPAID_RESERVATION_PK = 1
-FIXTURE_PERFECT_RESERVATION_PK = 2
+FIXTURE_UNPAID_PK = 1
+FIXTURE_PERFECT_PK = 2
 FIXTURE_STATIC_PRICE_PK = 3
 FIXTURE_COMPLEX_PARTIALLY_PAID_PK = 4
 # situation:
@@ -20,8 +20,30 @@ FIXTURE_COMPLEX_SMALL_PAYMENT_PK = 5
 FIXTURE_PAID_TOO_MUCH_PK = 6
 FIXTURE_PAID_TOO_MUCH_AND_TOO_LITTLE = 7
 
-# TODO: write tests for simpler test models
 # TODO: test matched dates
+
+class TestSimplePaymentQueries(TestCase):
+    fixtures = ['simple.json']
+
+    def test_simple_unpaid(self):
+        r: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_remote_accounts().get(
+            pk=FIXTURE_UNPAID_PK
+        )
+        self.assertTrue(r.balance)
+        self.assertEquals(r.balance, r.total_amount)
+
+
+    def test_perfect_payment(self):
+        r: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_remote_accounts().get(
+            pk=FIXTURE_PERFECT_PK
+        )
+        self.assertFalse(r.balance)
+        r: models.SimpleCustomerPayment = models.SimpleCustomerPayment.objects \
+            .with_remote_accounts().get(pk=FIXTURE_PERFECT_PK)
+        self.assertFalse(r.credit_remaining)
+
 
 class TestReservationPaymentQueries(TestCase):
     fixtures = ['reservations.json']
@@ -29,13 +51,13 @@ class TestReservationPaymentQueries(TestCase):
     def test_simple_unpaid_reservation(self):
         r: models.ReservationDebt = models.ReservationDebt.objects \
             .with_total_price().with_remote_accounts().get(
-            pk=FIXTURE_UNPAID_RESERVATION_PK
+            pk=FIXTURE_UNPAID_PK
         )
         self.assertTrue(r.balance)
         self.assertEquals(r.balance, r.total_amount)
         r: models.Reservation = models.Reservation.objects \
             .with_total_price().with_remote_accounts().get(
-            pk=FIXTURE_UNPAID_RESERVATION_PK
+            pk=FIXTURE_UNPAID_PK
         )
         self.assertTrue(r.balance)
         self.assertEquals(r.balance, r.total_amount)
@@ -44,16 +66,16 @@ class TestReservationPaymentQueries(TestCase):
     def test_perfect_reservation(self):
         r: models.ReservationDebt = models.ReservationDebt.objects\
             .with_total_price().with_remote_accounts().get(
-                pk=FIXTURE_PERFECT_RESERVATION_PK
+                pk=FIXTURE_PERFECT_PK
             )
         self.assertFalse(r.balance)
         r: models.Reservation = models.Reservation.objects \
             .with_total_price().with_remote_accounts().get(
-                pk=FIXTURE_PERFECT_RESERVATION_PK
+                pk=FIXTURE_PERFECT_PK
             )
         self.assertFalse(r.balance)
         r: models.ReservationPayment = models.ReservationPayment.objects \
-            .with_remote_accounts().get(pk=FIXTURE_PERFECT_RESERVATION_PK)
+            .with_remote_accounts().get(pk=FIXTURE_PERFECT_PK)
         self.assertFalse(r.credit_remaining)
 
 
