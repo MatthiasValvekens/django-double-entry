@@ -2,7 +2,7 @@ import logging
 import datetime
 from decimal import Decimal
 from collections import defaultdict, namedtuple
-from typing import Type, Tuple, cast
+from typing import Type, Tuple, cast, Optional
 
 from django.db import models
 from django.db.models import (
@@ -729,15 +729,16 @@ class BaseDebtPaymentSplit(BaseTransactionSplit):
 
 NINE_DIGIT_MODPAIR = (783142319, 289747279)
 
-def parse_transaction_no(ogm, prefix_digit, match=None):
+def parse_transaction_no(ogm, prefix_digit: Optional[int]=None, match=None):
     prefix, _ = parse_ogm(ogm, match)
 
     prefix_str = str(prefix)
-    if prefix_str[0] != prefix_digit:
-        raise ValueError()
+    rd_prefix_digit = int(prefix_str[0])
+    if prefix_digit is not None and rd_prefix_digit != prefix_digit:
+        raise ValueError
     unpack = (int(prefix_str[1:]) * NINE_DIGIT_MODPAIR[1]) % 10**9
     # ignore token digest, it already served its purpose
-    return unpack // 100
+    return rd_prefix_digit, unpack // 100
 
 class TransactionPartyQuerySet(models.QuerySet):
     model: 'TransactionPartyMixin'
@@ -745,7 +746,7 @@ class TransactionPartyQuerySet(models.QuerySet):
 
     def by_payment_tracking_no(self, ogm):
         try:
-            pk = parse_transaction_no(
+            prefix_digit, pk = parse_transaction_no(
                 ogm, prefix_digit=self.model.payment_tracking_prefix
             )
         except ValueError:
@@ -759,7 +760,7 @@ class TransactionPartyQuerySet(models.QuerySet):
                 try:
                     yield parse_transaction_no(
                         ogm, prefix_digit=self.model.payment_tracking_prefix
-                    )
+                    )[1]
                 except ValueError:
                     continue
 
@@ -963,7 +964,7 @@ class TransactionPartyMixin(models.Model):
 
     @classmethod
     def parse_transaction_no(cls, ogm):
-        return parse_transaction_no(ogm, cls.payment_tracking_prefix)
+        return parse_transaction_no(ogm, cls.payment_tracking_prefix)[1]
 
     def _payment_tracking_no(self, formatted):
         type_prefix = self.__class__.payment_tracking_prefix

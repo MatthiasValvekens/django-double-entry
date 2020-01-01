@@ -142,8 +142,19 @@ class AccountColumnTransactionParser(FinancialCSVParser):
         parsed['account_lookup_str'] = row[self.account_column_name]
         return parsed
 
-class BankCSVParser(FinancialCSVParser):
+class BankTransactionInfo(TransactionInfo):
 
+    @property
+    def ogm(self):
+        return self.account_lookup_str
+
+    @property
+    def account_id(self) -> (int, int):
+        from double_entry import models
+        return models.parse_transaction_no(self.account_lookup_str)
+
+class BankCSVParser(FinancialCSVParser):
+    transaction_info_class = BankTransactionInfo
     verbose_name = None
 
     def get_ogm(self, line_no: int, row: dict) -> Optional[Tuple[str, bool]]:
