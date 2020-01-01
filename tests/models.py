@@ -104,7 +104,7 @@ class ReservationDebt(base.BaseDebtRecord):
             return sum(
                 (ticket.count * ticket.category.price
                  for ticket in self.reservation.tickets.all()),
-                Money(Decimal('0.00'), settings.BOOKKEEPING_CURRENCY)
+                Money(Decimal('0.00'), settings.DEFAULT_CURRENCY)
             )
 
 class Reservation(ReservationDebt):
