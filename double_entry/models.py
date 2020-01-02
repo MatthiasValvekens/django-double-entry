@@ -974,11 +974,7 @@ class TransactionPartyMixin(models.Model):
             )
         # memoryview weirdness forces this
         token_seed = bytes(self.hidden_token)[1]
-        raw = int('%07d%02d' % (
-            self.pk % 10 ** 7,
-            token_seed % 100,
-        )
-                  )
+        raw = int('%07d%02d' % (self.pk % 10 ** 7, token_seed % 100))
         obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
         prefix_str = '%s%09d' % (type_prefix, obf)
         return ogm_from_prefix(prefix_str, formatted)
