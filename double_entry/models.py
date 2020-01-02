@@ -8,8 +8,7 @@ from django.db import models
 from django.db.models import (
     F, Sum, Case, When, Subquery, OuterRef,
     Value, ExpressionWrapper,
-    Max,
-    Prefetch,
+    Max, Prefetch,
 )
 from django.db.models.functions import Coalesce
 from django.forms import ValidationError
@@ -120,6 +119,7 @@ class DoubleBookInterface(models.Model):
     # TODO: figure out if we can hook into the app registry preparation to
     #  call this method at some fixed point in the process, so we don't have
     #  to deal with ensuring it gets called in all accessor methods
+    #  same with TransactionPartyMixin
     @classmethod
     def _prepare_split_metadata(cls):
         """
@@ -774,7 +774,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # this does NOT compute the debt balance/member annotation
         return self.prefetch_related(
             Prefetch(
-                self.model.debts_manager_name,
+                self.model.get_debts_manager_name(),
                 queryset=self.model.get_debt_model().objects.with_payments()
             )
         )
@@ -783,7 +783,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # annotate payments relation (for symmetry)
         return self.prefetch_related(
             Prefetch(
-                self.model.payments_manager_name,
+                self.model.get_payments_manager_name(),
                 queryset=self.model.get_payment_model().objects.with_debts()
             )
         )
@@ -837,8 +837,8 @@ class TransactionPartyMixin(models.Model):
     _debt_model: Type[BaseDebtRecord] = None
     _payment_model: Type[BasePaymentRecord] = None
     _split_model: Type[BaseDebtPaymentSplit] = None
-    debts_manager_name: str = None
-    payments_manager_name: str = None
+    _debts_manager_name: str = None
+    _payments_manager_name: str = None
     _debt_remote_fk: str = None
     _payment_remote_fk: str = None
     _debt_remote_fk_column: str = None
@@ -863,6 +863,9 @@ class TransactionPartyMixin(models.Model):
 
     @classmethod
     def _annotate_model_metadata(cls):
+        if cls._debt_model is not None:
+            return
+
         fields = cls._meta.get_fields()
         m2one_fields = [f for f in fields if isinstance(f, ManyToOneRel)]
         m2one_models = set(f.remote_field.model for f in m2one_fields)
@@ -874,10 +877,7 @@ class TransactionPartyMixin(models.Model):
             other_half = remote_model.get_other_half_model()
             return other_half in m2one_models
 
-        if cls._debt_model is not None:
-            return
-
-        if cls.debts_manager_name is None:
+        if cls._debts_manager_name is None:
             debt_fields = [
                 f for f in m2one_fields if is_candidate(f, is_payment=False)
             ]
@@ -889,10 +889,10 @@ class TransactionPartyMixin(models.Model):
                     'Please set debts_manager_name'
                 )
             debts_f = debt_fields[0]
-            cls.debts_manager_name = debts_f.name
+            cls._debts_manager_name = debts_f.name
         else:
-            debts_f = cls._meta.get_field(cls.debts_manager_name)
-        if cls.payments_manager_name is None:
+            debts_f = cls._meta.get_field(cls._debts_manager_name)
+        if cls._payments_manager_name is None:
             payment_fields = [
                 f for f in m2one_fields if is_candidate(f, is_payment=True)
             ]
@@ -904,9 +904,9 @@ class TransactionPartyMixin(models.Model):
                     'Please set payments_manager_name'
                 )
             payments_f = payment_fields[0]
-            cls.payments_manager_name = payments_f.name
+            cls._payments_manager_name = payments_f.name
         else:
-            payments_f = cls._meta.get_field(cls.payments_manager_name)
+            payments_f = cls._meta.get_field(cls._payments_manager_name)
         cls._debt_model = debts_f.related_model
         cls._payment_model = payments_f.related_model
         if not issubclass(cls._debt_model, BaseDebtRecord):
@@ -928,6 +928,16 @@ class TransactionPartyMixin(models.Model):
                 'Payment and debt ledger classes are inconsistent.'
             )
         cls._split_model = cls._debt_model.get_split_model()[0]
+
+    @classmethod
+    def get_debts_manager_name(cls):
+        cls._annotate_model_metadata()
+        return cls._debts_manager_name
+
+    @classmethod
+    def get_payments_manager_name(cls):
+        cls._annotate_model_metadata()
+        return cls._payments_manager_name
 
     @classmethod
     def get_debt_model(cls):
@@ -1002,7 +1012,7 @@ class TransactionPartyMixin(models.Model):
             cls = self.__class__
             # TODO: can we do better than falling back on settings.DEFAULT_CURRENCY?
             return sum(
-                (d.balance for d in getattr(self, cls.debts_manager_name).all()),
+                (d.balance for d in getattr(self, cls.get_debts_manager_name()).all()),
                 Money(0, settings.DEFAULT_CURRENCY)
             )
 
@@ -1011,7 +1021,7 @@ class TransactionPartyMixin(models.Model):
         # see above
         cls = self.__class__
         return sum(
-            (d.amount_paid for d in getattr(self, cls.debts_manager_name).all()),
+            (d.amount_paid for d in getattr(self, cls.get_debts_manager_name()).all()),
             Money(0, settings.DEFAULT_CURRENCY)
         )
 
@@ -1020,7 +1030,7 @@ class TransactionPartyMixin(models.Model):
         # this one needs with_payment_annotations to be efficient
         cls = self.__class__
         return sum(
-            (d.total_amount for d in getattr(self, cls.payments_manager_name).all()),
+            (d.total_amount for d in getattr(self, cls.get_payments_manager_name()).all()),
             Money(0, settings.DEFAULT_CURRENCY)
         )
 
