@@ -12,7 +12,6 @@ from double_entry.forms import bulk_utils
 
 logger = logging.getLogger(__name__)
 
-# TODO: case-insensitive column names
 # TODO: clearly document parsers
 # TODO: delimiter autodetection
 
@@ -79,7 +78,7 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder[TP
             self.account_index[m.payment_tracking_no] = m
 
 
-class TransferResolver(bulk_utils.LedgerResolver[TP, TI, RT]):
+class TransferResolver(bulk_utils.LedgerResolver[TP, TI, RT], abstract=True):
     prefix_digit: int
 
     def get_index_builders(self):

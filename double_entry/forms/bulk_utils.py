@@ -1,4 +1,6 @@
+import abc
 import dataclasses
+import inspect
 import logging
 import datetime
 from dataclasses import dataclass
@@ -110,13 +112,13 @@ class ResolvedTransactionMessageContext:
 
 
 class TransactionWithMessages:
-    message_context: ResolvedTransactionMessageContext = None
-    do_not_skip: bool = False
+    message_context: ResolvedTransactionMessageContext
+    do_not_skip: bool
 
     @property
     def to_commit(self):
         v = self.message_context.verdict
-        if self.do_not_skip:
+        if bool(self.do_not_skip):
             # ignore a a suggest_discard verdict
             v &= ~ResolvedTransactionVerdict.SUGGEST_DISCARD
         return bool(v)
@@ -157,7 +159,7 @@ class ResolvedTransaction(TransactionWithMessages):
     timestamp: datetime.datetime
     pipeline_section_id: int
     message_context: ResolvedTransactionMessageContext
-    do_not_skip: bool=False
+    do_not_skip: bool
 
     def html_ignore(self):
         return 'message_context', 'do_no_skip'
@@ -171,7 +173,7 @@ LE = TypeVar('LE', bound=accounting_base.DoubleBookModel)
 class TransactionPartyIndexBuilder(Generic[TP]):
     transaction_party_model: ClassVar[Type[TP]]
 
-    def __init__(self, resolver: 'LedgerResolver'[TP]):
+    def __init__(self, resolver: 'LedgerResolver'):
         self.resolver = resolver
 
     def lookup(self, account_lookup_str: str) -> Optional[TP]:
@@ -235,10 +237,10 @@ class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
 
 # TODO: implement APIErrorContext
 
-class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT]):
-    transaction_party_model: ClassVar[Type[TP]]
-    transaction_info_class: ClassVar[Type[TI]]
-    resolved_transaction_class: ClassVar[Type[RT]]
+class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
+    transaction_party_model: ClassVar[Type[TP]] = None
+    transaction_info_class: ClassVar[Type[TI]] = None
+    resolved_transaction_class: ClassVar[Type[RT]] = None
 
     unknown_account_message = _(
         'Transaction account %(account)s unknown. '
@@ -260,10 +262,12 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT]):
         super().__init__(error_context)
 
     def __init_subclass__(cls, *args, abstract=False, **kwargs):
-        if cls.transaction_party_model is None:
+        abstract |= inspect.isabstract(cls)
+        if cls.transaction_party_model is None and not abstract:
             raise TypeError('Ledger resolver must set transaction_party_model')
         super().__init_subclass__(*args, **kwargs)
 
+    @abc.abstractmethod
     def get_index_builders(self) -> List[TransactionPartyIndexBuilder[TP]]:
         raise NotImplementedError
 
@@ -275,7 +279,7 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT]):
             transaction_party_id=transaction_party_id,
             error_context=RTErrorContextFromMixin(self, tinfo),
             pipeline_section_id=self.pipeline_section_id,
-            **tinfo_dict,
+            do_not_skip=False, **tinfo_dict
         )
 
     def unknown_account(self, account_lookup_str: str, line_nos: List[int]):
@@ -352,8 +356,8 @@ class PreparedTransaction(TransactionWithMessages, Generic[LE, RT]):
 PreparedTransactionList = Iterable[PreparedTransaction[LE,RT]]
 
 class LedgerEntryPreparator(Generic[LE, TP, RT]):
-    model: ClassVar[Type[LE]]
-    transaction_party_model: ClassVar[Type[TP]]
+    model: ClassVar[Type[LE]] = None
+    transaction_party_model: ClassVar[Type[TP]] = None
     # fk to transaction party model on ledger entry model
     account_field: str = None
     _valid_transactions = None
@@ -765,12 +769,14 @@ def refund_overpayment(
 PLE = TypeVar('PLE', bound=models.BasePaymentRecord)
 class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
 
-    overpayment_fmt_string = _(
-        'Received %(total_credit)s, but only %(total_used)s '
-        'can be applied to outstanding debts. '
-        'Payment(s) dated %(payment_dates)s have outstanding '
-        'balances.'
-    )
+    @property
+    def overpayment_fmt_string(self):
+        return _(
+            'Received %(total_credit)s, but only %(total_used)s '
+            'can be applied to outstanding debts. '
+            'Payment(s) dated %(payment_dates)s have outstanding '
+            'balances.'
+        )
 
     # optional, can be derived through reflection
     payment_fk_name = None
@@ -929,8 +935,8 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
         self.results = global_results
 
 
-class StandardCreditApportionmentMixin(CreditApportionmentMixin):
-    transaction_party_model: Type[accounting_base.TransactionPartyMixin]
+class StandardCreditApportionmentMixin(CreditApportionmentMixin[LE, TP, RT]):
+    transaction_party_model: Type[TP]
 
     @property
     def model(self):

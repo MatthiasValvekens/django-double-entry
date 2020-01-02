@@ -856,6 +856,8 @@ class TransactionPartyMixin(models.Model):
         default=make_token
     )
 
+    objects = TransactionPartyQuerySet.as_manager()
+
     class Meta:
         abstract = True
 
