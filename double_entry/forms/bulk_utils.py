@@ -158,8 +158,8 @@ class ResolvedTransaction(TransactionWithMessages):
     amount: Money
     timestamp: datetime.datetime
     pipeline_section_id: int
-    message_context: ResolvedTransactionMessageContext
-    do_not_skip: bool
+    message_context: ResolvedTransactionMessageContext = dataclasses.field(compare=False, hash=False)
+    do_not_skip: bool = dataclasses.field(compare=False, hash=False)
 
     def html_ignore(self):
         return 'message_context', 'do_no_skip'
@@ -277,7 +277,7 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
         del tinfo_dict['line_no']
         return self.resolved_transaction_class(
             transaction_party_id=transaction_party_id,
-            error_context=RTErrorContextFromMixin(self, tinfo),
+            message_context=RTErrorContextFromMixin(self, tinfo),
             pipeline_section_id=self.pipeline_section_id,
             do_not_skip=False, **tinfo_dict
         )
@@ -324,7 +324,7 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
     def __call__(self, transactions: List[TI]) -> Iterable[Tuple[TP, RT]]:
         # TODO: this is kind of a silly way of doing things
         _by_id: Dict[int, TP] = {}
-        _resolved_by_id: Dict[int, List[RT]] = {}
+        _resolved_by_id: Dict[int, List[RT]] = defaultdict(list)
 
         indexes = self.populate_indexes(transactions)
         for info in transactions:
@@ -340,7 +340,8 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
             # index builders will have taken care of that
 
         for account_id, acct in _by_id.items():
-            yield acct, _resolved_by_id[account_id]
+            for resolved in _resolved_by_id[account_id]:
+                yield acct, resolved
 
 
 @dataclass(frozen=True)

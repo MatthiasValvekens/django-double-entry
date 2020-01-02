@@ -44,7 +44,7 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder[TP
     def ogm_applies(self, ogm):
         try:
             prefix, modulus = double_entry.utils.parse_ogm(ogm)
-            return self.prefix_digit == str(prefix)[0]
+            return self.prefix_digit == prefix // 10**9
         except ValueError:
             return False
 
