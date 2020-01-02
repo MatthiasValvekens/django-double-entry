@@ -3,12 +3,13 @@ import datetime
 import pytz
 
 from io import StringIO
-from typing import List
+from typing import List, Optional, Set
 
 from django.test import TestCase
 from djmoney.money import Money
 
 from double_entry.forms.csv import BankTransactionInfo
+from double_entry.forms.utils import ErrorMixin
 from . import models
 from double_entry.forms import csv as forms_csv
 
@@ -49,6 +50,27 @@ KBC_LOOKUP_TEST_POSTPARSE = [
         (4, '+++176/0220/59911+++'), (7, '+++190/5063/21290+++')
     )
 ]
+
+class TestErrorMixin(ErrorMixin):
+
+    def __init__(self, test_case: TestCase, expected_error_lines: Set[int]):
+        self.test_case = test_case
+        self.lines_with_errors: Set[int] = set()
+        self.expected_errors = expected_error_lines
+
+    def assert_errors(self):
+        self.test_case.assertEqual(
+            self.lines_with_errors, self.expected_errors
+        )
+
+    def error_at_line(self, line_no: int, msg: str,
+                      params: Optional[dict] = None):
+        self.lines_with_errors.add(line_no)
+
+    def error_at_lines(self, line_nos: List[int], msg: str,
+                       params: Optional[dict]=None):
+        self.lines_with_errors.update(line_nos)
+
 
 class TestBankCSVs(TestCase):
     fixtures = ['reservations.json', 'simple.json']
@@ -93,3 +115,24 @@ class TestBankCSVs(TestCase):
         for row, exp_row in zip(rows, KBC_LOOKUP_TEST_POSTPARSE):
             with self.subTest(line_no=row.line_no):
                 self.assertEqual(row, exp_row)
+
+    def test_transfer_lookup(self):
+        # the errors of the kind we expect here are not reported to the error
+        # mixin, since the user shouldn't care about them anyway
+        # TODO: figure out a way to test these error conditions properly
+        error_feedback = TestErrorMixin(
+            test_case=self, expected_error_lines=set()
+        )
+        resolver = models.SimpleTransferResolver(
+            error_feedback, pipeline_section_id=-1
+        )
+        results = list(resolver(KBC_LOOKUP_TEST_POSTPARSE))
+        self.assertEqual(len(results), 2)
+        error_feedback.assert_errors()
+        (acct1, rt1), (acct2, rt2) = results
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        self.assertEqual(acct1, cust)
+        self.assertEqual(acct2, cust)
+        self.assertEqual(rt1, rt2)
+
+

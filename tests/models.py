@@ -8,6 +8,9 @@ from djmoney.models.fields import MoneyField
 from djmoney.money import Money
 
 from double_entry import models as base
+from double_entry.forms.bulk_utils import ResolvedTransaction
+from double_entry.forms.csv import BankTransactionInfo
+from double_entry.forms.transfers import TransferResolver
 from double_entry.utils import decimal_to_money
 
 
@@ -39,6 +42,14 @@ class SimpleCustomerPaymentSplit(base.BaseTransactionSplit):
         related_name='debt_splits'
     )
 
+
+class SimpleTransferResolver(TransferResolver[SimpleCustomer,
+                                              BankTransactionInfo,
+                                              ResolvedTransaction]):
+    transaction_party_model = SimpleCustomer
+    transaction_info_class = BankTransactionInfo
+    resolved_transaction_class = ResolvedTransaction
+    prefix_digit = 1
 
 class Event(models.Model):
     name = models.CharField(max_length=100)
