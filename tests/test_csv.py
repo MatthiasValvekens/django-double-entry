@@ -1,4 +1,5 @@
 import datetime
+
 import pytz
 
 from io import StringIO
@@ -30,6 +31,25 @@ BE00000000000000; ;TEST TEST;EUR; 00000000;08/08/2019;EUROPESE OVERSCHRIJVING NA
 BE00000000000000; ;TEST TEST;EUR; 00000000;08/08/2019;EUROPESE OVERSCHRIJVING NAAR ...;10/08/2019;32,00;100,00;32,00;;BE00 0000 0000 0000;KREDBEBB;DJANGO; ;;***190/5063/21290***
 """
 
+# Results of the above parsing test (parsing failures eliminated)
+# After lookup, we expect the following:
+#  2 Happy use case: real user, correct token (OK)
+#  3 nonexistent pk (not OK)
+#  4 real user, wrong token (not OK)
+#  7 (OK), result should coincide with line 2
+PARSE_TEST_DATETIME = pytz.timezone('Europe/Brussels').localize(
+    datetime.datetime(2019, 8, 8, 23, 59, 59, 999999)
+)
+
+KBC_LOOKUP_TEST_POSTPARSE = [
+    BankTransactionInfo(
+        ln, Money(32, 'EUR'), PARSE_TEST_DATETIME, lookup_str,
+    ) for ln, lookup_str in (
+        (2, '+++190/5063/21290+++'), (3, '+++154/5988/69980+++'),
+        (4, '+++176/0220/59911+++'), (7, '+++190/5063/21290+++')
+    )
+]
+
 class TestBankCSVs(TestCase):
     fixtures = ['reservations.json', 'simple.json']
 
@@ -43,7 +63,6 @@ class TestBankCSVs(TestCase):
         self.assertEquals(c2.payment_tracking_no, '+++290/5063/21227+++')
         c2.hidden_token = bytes.fromhex('deadbeefcafebabe')
         self.assertNotEqual(c2.hidden_token, '+++290/5063/21290+++')
-
 
         # these values are tightly coupled to the CSV testing data
         # so we should test that they stay the same
@@ -71,11 +90,6 @@ class TestBankCSVs(TestCase):
         self.assertEqual(rows[1].account_id, (1, 9000000))
         self.assertEqual(rows[2].account_id, (1, 1))
         self.assertEqual(rows[3].account_id, (1, 1))
-        for row in rows:
+        for row, exp_row in zip(rows, KBC_LOOKUP_TEST_POSTPARSE):
             with self.subTest(line_no=row.line_no):
-                self.assertEqual(row.amount, Money(32, 'EUR'))
-                self.assertEqual(
-                    row.timestamp, pytz.timezone('Europe/Brussels').localize(
-                        datetime.datetime(2019, 8, 8, 23, 59, 59, 999999)
-                    )
-                )
+                self.assertEqual(row, exp_row)
