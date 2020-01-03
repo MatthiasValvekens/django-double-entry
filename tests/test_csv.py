@@ -57,14 +57,10 @@ SIMPLE_LOOKUP_TEST_POSTPARSE = [
     )
 ]
 
-DUMMY_MESSAGE_CONTEXT = ResolvedTransactionMessageContext()
-
-SIMPLE_LOOKUP_TEST_RESULT = ResolvedTransaction(
-    transaction_party_id=1, amount=Money(32, 'EUR'),
-    timestamp=PARSE_TEST_DATETIME,
-    pipeline_section_id=-1,
-    message_context=DUMMY_MESSAGE_CONTEXT, do_not_skip=False
-)
+SIMPLE_LOOKUP_TEST_RESULT_DATA = {
+    'transaction_party_id': 1, 'amount': Money(32, 'EUR'),
+    'timestamp': PARSE_TEST_DATETIME,
+}
 
 class TestErrorMixin(ErrorMixin):
 
@@ -160,5 +156,29 @@ class TestBankCSVs(TestCase):
         self.assertEqual(len(results), 2)
         error_feedback.assert_errors()
         cust = models.SimpleCustomer.objects.get(pk=1)
-        self.assertEqual(results[0], (cust, SIMPLE_LOOKUP_TEST_RESULT))
-        self.assertEqual(results[1], (cust, SIMPLE_LOOKUP_TEST_RESULT))
+        exp_result = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            message_context=ResolvedTransactionMessageContext(),
+            do_not_skip=False
+        )
+        self.assertEqual(results[0], (cust, exp_result))
+        self.assertEqual(results[1], (cust, exp_result))
+
+    def test_review_simple_resolved_transaction(self):
+        error_context = ResolvedTransactionMessageContext()
+        resolved_transaction = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.review()
+        self.assertEqual(len(error_context.transaction_warnings), 0)
+        self.assertEqual(len(error_context.transaction_errors), 0)
+        self.assertEqual(len(prep.valid_transactions), 1)
+        pt, = prep.valid_transactions
+        le: models.SimpleCustomerPayment = pt.ledger_entry
+        self.assertEqual(le.total_amount, resolved_transaction.amount)
+        self.assertEqual(le.credit_remaining, resolved_transaction.amount)

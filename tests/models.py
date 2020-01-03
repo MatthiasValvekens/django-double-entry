@@ -10,7 +10,10 @@ from djmoney.money import Money
 from double_entry import models as base
 from double_entry.forms.bulk_utils import ResolvedTransaction
 from double_entry.forms.csv import BankTransactionInfo
-from double_entry.forms.transfers import TransferResolver
+from double_entry.forms.transfers import (
+    TransferResolver,
+    TransferPaymentPreparator,
+)
 from double_entry.utils import decimal_to_money
 
 
@@ -25,14 +28,20 @@ class SimpleCustomerDebt(base.BaseDebtRecord, base.ConcreteAmountMixin):
         related_name='debts'
     )
 
-class SimpleCustomerPayment(base.BasePaymentRecord, base.ConcreteAmountMixin):
+
+class SimpleCustomerPaymentQuerySet(base.BasePaymentQuerySet, base.DuplicationProtectedQuerySet):
+    pass
+
+class SimpleCustomerPayment(base.BasePaymentRecord, base.ConcreteAmountMixin, base.DuplicationProtectionMixin):
+    dupcheck_signature_fields = ('creditor',)
+    objects = SimpleCustomerPaymentQuerySet.as_manager()
     creditor = models.ForeignKey(
         SimpleCustomer, on_delete=models.CASCADE,
         related_name='payments'
     )
 
 
-class SimpleCustomerPaymentSplit(base.BaseTransactionSplit):
+class SimpleCustomerPaymentSplit(base.BaseDebtPaymentSplit):
     payment = models.ForeignKey(
         SimpleCustomerPayment, on_delete=models.CASCADE,
         related_name='payment_splits'
@@ -43,6 +52,8 @@ class SimpleCustomerPaymentSplit(base.BaseTransactionSplit):
     )
 
 
+# TODO: add factory methods to double_entry to build these guys
+
 class SimpleTransferResolver(TransferResolver[SimpleCustomer,
                                               BankTransactionInfo,
                                               ResolvedTransaction]):
@@ -50,6 +61,14 @@ class SimpleTransferResolver(TransferResolver[SimpleCustomer,
     transaction_info_class = BankTransactionInfo
     resolved_transaction_class = ResolvedTransaction
     prefix_digit = 1
+
+class SimpleTransferPreparator(TransferPaymentPreparator[
+                                        SimpleCustomerPayment,
+                                        SimpleCustomer,
+                                        ResolvedTransaction
+                                    ]):
+    prefix_digit = 1
+    transaction_party_model = SimpleCustomer
 
 class Event(models.Model):
     name = models.CharField(max_length=100)
