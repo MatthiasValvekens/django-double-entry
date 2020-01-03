@@ -8,6 +8,10 @@ from typing import List, Optional, Set
 from django.test import TestCase
 from djmoney.money import Money
 
+from double_entry.forms.bulk_utils import (
+    ResolvedTransaction,
+    ResolvedTransactionMessageContext,
+)
 from double_entry.forms.csv import BankTransactionInfo
 from double_entry.forms.utils import ErrorMixin
 from . import models
@@ -23,7 +27,7 @@ TICKET_OGMS = ['+++290/5063/21227+++', '+++202/6984/10534+++', '+++291/8961/5036
 #  5 wrong check digits (both not OK)
 #  6 totally nonsensical tracking number (both not OK)
 #  7 in free-form column (OK)
-KBC_LOOKUP_TEST = """Rekeningnummer;Rubrieknaam;Naam;Munt;Afschriftnummer;Datum;Omschrijving;Valuta;Bedrag;Saldo;credit;debet;rekeningnummer tegenpartij;BIC tegenpartij;Naam tegenpartij;Adres tegenpartij;gestructureerde mededeling;Vrije mededeling
+KBC_SIMPLE_LOOKUP_TEST = """Rekeningnummer;Rubrieknaam;Naam;Munt;Afschriftnummer;Datum;Omschrijving;Valuta;Bedrag;Saldo;credit;debet;rekeningnummer tegenpartij;BIC tegenpartij;Naam tegenpartij;Adres tegenpartij;gestructureerde mededeling;Vrije mededeling
 BE00000000000000; ;TEST TEST;EUR; 00000000;08/08/2019;EUROPESE OVERSCHRIJVING NAAR ...;10/08/2019;32,00;100,00;32,00;;BE00 0000 0000 0000;KREDBEBB;DJANGO; ;***190/5063/21290***; 
 BE00000000000000; ;TEST TEST;EUR; 00000000;08/08/2019;EUROPESE OVERSCHRIJVING NAAR ...;10/08/2019;32,00;100,00;32,00;;BE00 0000 0000 0000;KREDBEBB;DJANGO; ;***154/5988/69980***;
 BE00000000000000; ;TEST TEST;EUR; 00000000;08/08/2019;EUROPESE OVERSCHRIJVING NAAR ...;10/08/2019;32,00;100,00;32,00;;BE00 0000 0000 0000;KREDBEBB;DJANGO; ;***176/0220/59911***;
@@ -42,7 +46,7 @@ PARSE_TEST_DATETIME = pytz.timezone('Europe/Brussels').localize(
     datetime.datetime(2019, 8, 8, 23, 59, 59, 999999)
 )
 
-KBC_LOOKUP_TEST_POSTPARSE = [
+SIMPLE_LOOKUP_TEST_POSTPARSE = [
     BankTransactionInfo(
         ln, Money(32, 'EUR'), PARSE_TEST_DATETIME, lookup_str,
     ) for ln, lookup_str in (
@@ -50,6 +54,15 @@ KBC_LOOKUP_TEST_POSTPARSE = [
         (4, '+++176/0220/59911+++'), (7, '+++190/5063/21290+++')
     )
 ]
+
+DUMMY_MESSAGE_CONTEXT = ResolvedTransactionMessageContext()
+
+SIMPLE_LOOKUP_TEST_RESULT = ResolvedTransaction(
+    transaction_party_id=1, amount=Money(32, 'EUR'),
+    timestamp=PARSE_TEST_DATETIME,
+    pipeline_section_id=-1,
+    message_context=DUMMY_MESSAGE_CONTEXT, do_not_skip=False
+)
 
 class TestErrorMixin(ErrorMixin):
 
@@ -99,8 +112,8 @@ class TestBankCSVs(TestCase):
             with self.subTest(pk=ix + 1, scheme='ticket'):
                 self.assertEqual(val, exp)
 
-    def test_kbc_parse(self):
-        parser = forms_csv.KBCCSVParser(StringIO(KBC_LOOKUP_TEST))
+    def test_simple_kbc_parse(self):
+        parser = forms_csv.KBCCSVParser(StringIO(KBC_SIMPLE_LOOKUP_TEST))
         row: BankTransactionInfo
         rows: List[BankTransactionInfo] = parser.parsed_data
         self.assertEqual(
@@ -112,11 +125,11 @@ class TestBankCSVs(TestCase):
         self.assertEqual(rows[1].account_id, (1, 9000000))
         self.assertEqual(rows[2].account_id, (1, 1))
         self.assertEqual(rows[3].account_id, (1, 1))
-        for row, exp_row in zip(rows, KBC_LOOKUP_TEST_POSTPARSE):
+        for row, exp_row in zip(rows, SIMPLE_LOOKUP_TEST_POSTPARSE):
             with self.subTest(line_no=row.line_no):
                 self.assertEqual(row, exp_row)
 
-    def test_transfer_lookup(self):
+    def test_simple_transfer_lookup(self):
         # the errors of the kind we expect here are not reported to the error
         # mixin, since the user shouldn't care about them anyway
         # TODO: figure out a way to test these error conditions properly
@@ -126,13 +139,11 @@ class TestBankCSVs(TestCase):
         resolver = models.SimpleTransferResolver(
             error_feedback, pipeline_section_id=-1
         )
-        results = list(resolver(KBC_LOOKUP_TEST_POSTPARSE))
+        results = list(resolver(SIMPLE_LOOKUP_TEST_POSTPARSE))
         self.assertEqual(len(results), 2)
         error_feedback.assert_errors()
-        (acct1, rt1), (acct2, rt2) = results
         cust = models.SimpleCustomer.objects.get(pk=1)
-        self.assertEqual(acct1, cust)
-        self.assertEqual(acct2, cust)
-        self.assertEqual(rt1, rt2)
+        self.assertEqual(results[0], (cust, SIMPLE_LOOKUP_TEST_RESULT))
+        self.assertEqual(results[1], (cust, SIMPLE_LOOKUP_TEST_RESULT))
 
 
