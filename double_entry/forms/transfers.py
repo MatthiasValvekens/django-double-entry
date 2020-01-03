@@ -65,17 +65,23 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder[TP
             self.line_index.keys(), validate_unseen=True
         )
 
-        # We don't show this error in the interface, since
-        # if the OGM validates properly AND is not found in our system,
-        # it probably simply corresponds to a transaction that we don't
-        # care about
         if unseen:
-            logger.info(
-                'OGMs not corresponding to valid user records: %s.',
-                ', '.join(unseen)
-            )
+            self.report_invalid_ogms(unseen)
         for m in account_qs:
             self.account_index[m.payment_tracking_no] = m
+
+    def report_invalid_ogms(self, unseen):
+        """
+        Separate for easier mocking in tests.
+        We don't show this error in the interface, since
+        if the OGM validates properly AND is not found in our system,
+        it probably simply corresponds to a transaction that we don't
+        care about.
+        """
+        logger.info(
+            'OGMs not corresponding to valid user records: %s.',
+            ', '.join(unseen)
+        )
 
 
 class TransferResolver(bulk_utils.LedgerResolver[TP, TI, RT], abstract=True):

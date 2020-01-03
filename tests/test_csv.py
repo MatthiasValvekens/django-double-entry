@@ -1,4 +1,5 @@
 import datetime
+from unittest import mock
 
 import pytz
 
@@ -17,6 +18,7 @@ from double_entry.forms.utils import ErrorMixin
 from . import models
 from double_entry.forms import csv as forms_csv
 
+# OGMs for all our test users in the database
 SIMPLE_OGMS = ['+++190/5063/21290+++', '+++102/6984/10597+++', '+++191/8961/50327+++', '+++153/4339/48985+++', '+++192/0586/45737+++', '+++180/1915/47216+++', '+++160/9604/46545+++']
 TICKET_OGMS = ['+++290/5063/21227+++', '+++202/6984/10534+++', '+++291/8961/50361+++', '+++253/4339/48922+++', '+++292/0586/45771+++', '+++280/1915/47250+++', '+++260/9604/46579+++']
 
@@ -132,18 +134,31 @@ class TestBankCSVs(TestCase):
     def test_simple_transfer_lookup(self):
         # the errors of the kind we expect here are not reported to the error
         # mixin, since the user shouldn't care about them anyway
-        # TODO: figure out a way to test these error conditions properly
         error_feedback = TestErrorMixin(
             test_case=self, expected_error_lines=set()
         )
+        # instead, we hook into TransferTransactionIndexBuilder to
+        # get feedback on the errors
+        unseen_ogms = None
+        def unseen_callback(_self, unseen):
+            nonlocal unseen_ogms
+            unseen_ogms = unseen
+
         resolver = models.SimpleTransferResolver(
             error_feedback, pipeline_section_id=-1
         )
-        results = list(resolver(SIMPLE_LOOKUP_TEST_POSTPARSE))
+        from double_entry.forms.transfers import TransferTransactionIndexBuilder
+        mockery = mock.patch.object(
+            TransferTransactionIndexBuilder, 'report_invalid_ogms',
+            new=unseen_callback
+        )
+        with mockery:
+            results = list(resolver(SIMPLE_LOOKUP_TEST_POSTPARSE))
+        self.assertEqual(
+            unseen_ogms, {'+++154/5988/69980+++', '+++176/0220/59911+++'}
+        )
         self.assertEqual(len(results), 2)
         error_feedback.assert_errors()
         cust = models.SimpleCustomer.objects.get(pk=1)
         self.assertEqual(results[0], (cust, SIMPLE_LOOKUP_TEST_RESULT))
         self.assertEqual(results[1], (cust, SIMPLE_LOOKUP_TEST_RESULT))
-
-
