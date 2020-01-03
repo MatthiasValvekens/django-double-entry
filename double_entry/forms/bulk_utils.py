@@ -363,35 +363,48 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
     account_field: str = None
     _valid_transactions = None
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        if cls.account_field is not None:
-            return
+    # This can't always be done in __init_subclass__, since messing with models
+    #  in Django is very finicky until the full app registry is loaded
+    # The _ensure methods will always be called in the order in which they are
+    # defined, and can be overridden to perform initialisation logic if necessary
+    @classmethod
+    def _ensure_transaction_party_model_set(cls):
+        if cls.transaction_party_model is None:
+            raise TypeError('transaction_party_model must be set')
 
-        # have to do this here, we don't know whether we're
-        # dealing with payments or debts
-        model: Type[LE] = cls.model
-        tpm: Type[TP] = cls.transaction_party_model
-        if model is None or tpm is None:
-            return  # abstract
-        def is_candidate(field):
-            if not isinstance(field, ForeignKey):
-                return False
-            remote_model = field.remote_field.model
-            return remote_model == tpm
-        try:
-            account_field, = (
-                is_candidate(f) for f in model._meta.get_fields()
-            )
-        except ValueError:
-            raise TypeError(
-                'Could not establish a link between transaction party model '
-                'and ledger entry model. Please set the `account_field` '
-                'class attribute.'
-            )
-        cls.account_field = account_field.name
+    @classmethod
+    def _ensure_model_set(cls):
+        if cls.model is None:
+            raise TypeError('model must be set')
+
+    @classmethod
+    def get_account_field(cls):
+        if cls.account_field is None:
+            model: Type[LE] = cls.model
+            tpm: Type[TP] = cls.transaction_party_model
+
+            def is_candidate(field):
+                if not isinstance(field, ForeignKey):
+                    return False
+                return field.related_model == tpm
+
+            try:
+                account_field, = (
+                    f for f in model._meta.get_fields() if is_candidate(f)
+                )
+            except ValueError:
+                raise TypeError(
+                    'Could not establish a link between transaction party model '
+                    'and ledger entry model. Please set the `account_field` '
+                    'class attribute.'
+                )
+            cls.account_field = account_field.name
+
+        return cls.account_field
 
     def __init__(self, resolved_transactions: Iterable[Tuple[TP, RT]]):
+        self.__class__._ensure_transaction_party_model_set()
+        self.__class__._ensure_model_set()
         # ensure that resolved transactions are always sorted
         # in chronological order
         self.resolved_transactions = sorted(
@@ -424,21 +437,21 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
         return {
             'total_amount': transaction.amount,
             'timestamp': transaction.timestamp,
-            self.__class__.account_field: acct
+            self.__class__.get_account_field(): acct
         }
 
     def validate_global(self, valid_transactions: PreparedTransactionList) \
             -> PreparedTransactionList:
         # this method can assume that all transactions have the
         # ledger_entry property set to something meaningful
-        return iter(valid_transactions)
+        return valid_transactions
 
     def _prepare_and_validate(self):
         if self._valid_transactions is not None:
             return
         resolved: List[Tuple[TP, RT]] = self.resolved_transactions
         # initialise ORM objects when possible, and collect the valid ones
-        def indiv_transactions() -> Iterable[PreparedTransaction[RT, LE]]:
+        def indiv_transactions() -> PreparedTransactionList:
             acct: TransactionPartyMixin
             for acct, t in resolved:
                 kwargs = self.model_kwargs_for_transaction(acct, t)
@@ -489,10 +502,7 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
     multiple_dup_message = None
 
     def validate_global(self, valid_transactions: PreparedTransactionList):
-        valid_transactions = super().validate_global(valid_transactions)
-        # early out, nothing to do
-        if not valid_transactions:
-            return []
+        valid_transactions = list(super().validate_global(valid_transactions))
         dates = [
             timezone.localdate(t.transaction.timestamp)
             for t in valid_transactions
@@ -939,9 +949,10 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
 class StandardCreditApportionmentMixin(CreditApportionmentMixin[LE, TP, RT]):
     transaction_party_model: Type[TP]
 
-    @property
-    def model(self):
-        return self.transaction_party_model.get_payment_model()
+    @classmethod
+    def _ensure_model_set(cls):
+        if cls.model is None:
+            cls.model = cls.transaction_party_model.get_payment_model()
 
     def transaction_buckets(self):
         trans_buckets = defaultdict(list)
