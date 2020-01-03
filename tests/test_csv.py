@@ -182,3 +182,18 @@ class TestBankCSVs(TestCase):
         le: models.SimpleCustomerPayment = pt.ledger_entry
         self.assertEqual(le.total_amount, resolved_transaction.amount)
         self.assertEqual(le.credit_remaining, resolved_transaction.amount)
+
+    def test_commit_simple_resolved_transaction(self):
+        error_context = ResolvedTransactionMessageContext()
+        resolved_transaction = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.commit()
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects\
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
