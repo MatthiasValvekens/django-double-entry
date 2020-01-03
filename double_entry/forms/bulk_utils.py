@@ -890,6 +890,7 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
         super().commit()
 
         from django.db import connection
+        self._trans_buckets = self.transaction_buckets()
         can_bulk_save = connection.features.can_return_ids_from_bulk_insert
         global_results = ApportionmentResult()
 
