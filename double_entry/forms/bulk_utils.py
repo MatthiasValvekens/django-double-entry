@@ -171,7 +171,6 @@ TP = TypeVar('TP', bound=accounting_base.TransactionPartyMixin)
 LE = TypeVar('LE', bound=accounting_base.DoubleBookModel)
 
 class TransactionPartyIndexBuilder(Generic[TP]):
-    transaction_party_model: ClassVar[Type[TP]]
 
     def __init__(self, resolver: 'LedgerResolver'):
         self.resolver = resolver

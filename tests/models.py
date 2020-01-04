@@ -60,14 +60,12 @@ class SimpleTransferResolver(TransferResolver[SimpleCustomer,
     transaction_party_model = SimpleCustomer
     transaction_info_class = BankTransactionInfo
     resolved_transaction_class = ResolvedTransaction
-    prefix_digit = 1
 
 class SimpleTransferPreparator(TransferPaymentPreparator[
                                         SimpleCustomerPayment,
                                         SimpleCustomer,
                                         ResolvedTransaction
                                     ]):
-    prefix_digit = 1
     transaction_party_model = SimpleCustomer
 
 class Event(models.Model):

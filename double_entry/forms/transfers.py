@@ -85,20 +85,17 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder[TP
 
 
 class TransferResolver(bulk_utils.LedgerResolver[TP, TI, RT], abstract=True):
-    prefix_digit: int
 
     def get_index_builders(self):
+        tpm = self.__class__.transaction_party_model
+        prefix_digit = tpm.payment_tracking_prefix
         return [
-            TransferTransactionIndexBuilder(
-                self, prefix_digit=self.prefix_digit
-            )
+            TransferTransactionIndexBuilder(self, prefix_digit=prefix_digit)
         ]
 
 
 class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin[LE, TP, RT],
                                 bulk_utils.DuplicationProtectedPreparator[LE, TP, RT]):
-
-    prefix_digit = None
 
     multiple_dup_message = _(
         'A bank transfer payment by %(account)s '

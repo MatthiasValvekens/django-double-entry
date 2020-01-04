@@ -833,7 +833,7 @@ class TransactionPartyQuerySet(models.QuerySet):
 #  through reflection
 class TransactionPartyMixin(models.Model):
 
-    payment_tracking_prefix = None
+    payment_tracking_prefix: int = None
     _debt_model: Type[BaseDebtRecord] = None
     _payment_model: Type[BasePaymentRecord] = None
     _split_model: Type[BaseDebtPaymentSplit] = None
