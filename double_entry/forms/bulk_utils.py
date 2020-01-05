@@ -76,7 +76,7 @@ class ResolvedTransactionMessageContext:
 
     @property
     def verdict(self) -> ResolvedTransactionVerdict:
-        return self.verdict
+        return self._verdict
 
     def error(self, msg: str, params: Optional[dict]=None):
         self.discard()
@@ -351,6 +351,10 @@ class PreparedTransaction(TransactionWithMessages, Generic[LE, RT]):
     @property
     def message_context(self):
         return self.transaction.message_context
+
+    @property
+    def do_not_skip(self) -> bool:
+        return self.transaction.do_not_skip
 
 
 PreparedTransactionList = Iterable[PreparedTransaction[LE,RT]]
