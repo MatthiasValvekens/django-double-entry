@@ -172,6 +172,11 @@ class TestBankCSVs(TestCase):
         self.assertEqual(results[0], (cust, exp_result))
         self.assertEqual(results[1], (cust, exp_result))
 
+# noinspection DuplicatedCode
+class TestPreparators(TestCase):
+
+    fixtures = ['reservations.json', 'simple.json']
+
     def test_review_simple_resolved_transaction(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
