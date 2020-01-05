@@ -49,7 +49,6 @@ originating from .csv files
 
 
 # an error prevents further processing, a warning doesn't
-# TODO maybe support "overrulable" errors? Makes sense e.g. for duplicates
 class ResolvedTransactionVerdict(IntFlag):
     COMMIT = 0
     SUGGEST_DISCARD = 1
@@ -557,9 +556,8 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
 
                     broadcast_warning(dups, msg_fmt_str, params)
                     # honour do_not_skip
-                    for d in dups:
-                        d.suggest_skip()
-                        yield d
+                    ResolvedTransactionMessageContext.mass_suggest_skip(dups)
+                    yield from dups
 
         return strip_duplicates()
                 
