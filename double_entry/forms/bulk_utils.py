@@ -1,3 +1,38 @@
+"""
+Utilities for importing financial transactions in bulk.
+For now, all code in the pipeline assumes that there is one fixed party to all
+transactions (i.e. the website tenant), and one other party that may vary
+by transaction. These parties are kept track of in one or more database tables.
+
+Transactions enter the pipeline as TransactionInfo objects from a CSV parser,
+and then pass through the following stages:
+
+ - Resolution: figure out to which account the transactions belong.
+   Can be extended to support multi-account transactions in the future.
+   This produces ResolvedTransaction objects for all transactions for which
+   we can find a corresponding account in the database. A ResolvedTransaction
+   object also comes with messaging facilities to attach extra information for
+   the human operator further down the processing pipeline.
+ - Preparation: takes care of creating ORM objects corresponding to
+   transactions and/or split objects to indicate relationships between
+   transactions. Transactions that are deemed suspect or faulty can be discarded
+   with an appropriate error message, or "softly" discarded in a manner that
+   can be overridden by the user.
+ - Commit/review: if the pipeline is run in review mode, nothing is saved to the
+   database, but the results of the pipeline should then be collected and
+   presented to the user so that he/she can make an informed decision on what to
+   commit/alter.
+   If the pipeline is run in commit mode, the ORM objects created in the
+   preparation step are saved to the database, unless the corresponding
+   transactions have been marked as discarded.
+
+   The submission API (to be worked out) enters the pipeline immediately after
+   the resolution step, since the API user is supposed to be aware of the primary
+   keys of the transaction parties involved.
+   The goal is to route all transaction review operations in the UI through
+   said API, to make sure that everything ultimately passes through the same
+   pipeline, which avoids interface duplication.
+"""
 import abc
 import dataclasses
 import inspect

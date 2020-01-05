@@ -173,6 +173,7 @@ class TestBankCSVs(TestCase):
         self.assertEqual(results[0], (cust, exp_result))
         self.assertEqual(results[1], (cust, exp_result))
 
+# TODO: test these with queryset sealing
 # noinspection DuplicatedCode
 class TestPreparators(TestCase):
 
