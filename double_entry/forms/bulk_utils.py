@@ -121,7 +121,8 @@ class TransactionWithMessages:
         if bool(self.do_not_skip):
             # ignore a a suggest_discard verdict
             v &= ~ResolvedTransactionVerdict.SUGGEST_DISCARD
-        return bool(v)
+        # COMMIT is 0, so this works
+        return not bool(v)
 
     def discard(self):
         self.message_context.discard()
@@ -464,9 +465,13 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
                 entry.spoof_matched_balance(Decimal('0.00'))
                 yield PreparedTransaction(t, entry)
 
-        self._valid_transactions = list(
-            self.validate_global(indiv_transactions())
-        )
+        # we enforce the skipping verdict here
+        # This automatically honours do_not_skip if SUGGEST_SKIP is set,
+        # and DISCARD if relevant.
+        self._valid_transactions = [
+            pt for pt in self.validate_global(indiv_transactions())
+            if pt.to_commit
+        ]
 
     @property
     def valid_transactions(self) -> List[PreparedTransaction[LE,RT]]:
@@ -554,8 +559,7 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
                     # honour do_not_skip
                     for d in dups:
                         d.suggest_skip()
-                        if d.to_commit:
-                            yield d
+                        yield d
 
         return strip_duplicates()
                 
