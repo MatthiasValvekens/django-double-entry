@@ -181,7 +181,7 @@ class TestBankCSVs(TestCase):
         pt, = prep.valid_transactions
         le: models.SimpleCustomerPayment = pt.ledger_entry
         self.assertEqual(le.total_amount, resolved_transaction.amount)
-        self.assertEqual(le.credit_remaining, resolved_transaction.amount)
+        self.assertEqual(le.credit_remaining, Money(0, 'EUR'))
 
     def test_commit_simple_resolved_transaction(self):
         error_context = ResolvedTransactionMessageContext()

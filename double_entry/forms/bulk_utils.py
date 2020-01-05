@@ -626,6 +626,9 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
                 # it should be unnecessary, but it doesn't really matter
                 del debt_list[index]
 
+                # for consistency
+                payment.spoof_matched_balance(payment.total_amount.amount)
+                exact_match.spoof_matched_balance(exact_match.total_amount.amount)
                 # yield payment split covering this transaction
                 yield split_model(**{
                     payment_fk_name: payment, debt_fk_name: exact_match,
