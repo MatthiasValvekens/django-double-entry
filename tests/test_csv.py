@@ -12,6 +12,7 @@ from djmoney.money import Money
 from double_entry.forms.bulk_utils import (
     ResolvedTransaction,
     ResolvedTransactionMessageContext,
+    ResolvedTransactionVerdict,
 )
 from double_entry.forms.csv import BankTransactionInfo
 from double_entry.forms.utils import ErrorMixin
@@ -195,6 +196,9 @@ class TestPreparators(TestCase):
         le: models.SimpleCustomerPayment = pt.ledger_entry
         self.assertEqual(le.total_amount, resolved_transaction.amount)
         self.assertEqual(le.credit_remaining, Money(0, 'EUR'))
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.COMMIT
+        )
 
     def test_commit_simple_resolved_transaction(self):
         error_context = ResolvedTransactionMessageContext()
@@ -276,3 +280,92 @@ class TestPreparators(TestCase):
         pmt: models.SimpleCustomerPayment = models.SimpleCustomerPayment.objects \
             .with_debts().get(creditor_id=1)
         self.assertTrue(pmt.fully_matched)
+
+    def test_commit_twice_review(self):
+        error_context = ResolvedTransactionMessageContext()
+        resolved_transaction = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.commit()
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+        # reload to make sure
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.review()
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.SUGGEST_DISCARD
+        )
+
+    def test_commit_twice_noforce(self):
+        error_context = ResolvedTransactionMessageContext()
+        resolved_transaction = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.commit()
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+        # reload to make sure
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.commit()
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.SUGGEST_DISCARD
+        )
+
+        pmt_count = models.SimpleCustomerPayment.objects.filter(
+            creditor_id=1
+        ).count()
+        self.assertEqual(pmt_count, 1)
+
+    def test_commit_twice_withforce(self):
+        error_context = ResolvedTransactionMessageContext()
+        resolved_transaction = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.commit()
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+        # reload to make sure
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        resolved_transaction = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            message_context=error_context, do_not_skip=True,
+        )
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.commit()
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.SUGGEST_DISCARD
+        )
+
+        pmt_count = models.SimpleCustomerPayment.objects.filter(
+            creditor_id=1
+        ).count()
+        self.assertEqual(pmt_count, 2)
