@@ -114,3 +114,11 @@ class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin[LE, 
 
     # unreadable payment references should be skipped silently
     unparseable_account_message = None
+
+    def dup_error_params(self, signature_used):
+        params = super().dup_error_params(signature_used)
+        # TODO: this is sane enough as a default, but we should perhaps
+        #  not impose it.
+        account_id = getattr(signature_used, self.account_field + '_id')
+        params['account'] = str(self.get_account(account_id))
+        return params
