@@ -149,9 +149,7 @@ class TestBankCSVs(TestCase):
             nonlocal unseen_ogms
             unseen_ogms = unseen
 
-        resolver = models.SimpleTransferResolver(
-            error_feedback, pipeline_section_id=-1
-        )
+        resolver = models.SimpleTransferResolver(error_feedback)
         from double_entry.forms.transfers import TransferTransactionIndexBuilder
         mockery = mock.patch.object(
             TransferTransactionIndexBuilder, 'report_invalid_ogms',
@@ -166,7 +164,7 @@ class TestBankCSVs(TestCase):
         error_feedback.assert_errors()
         cust = models.SimpleCustomer.objects.get(pk=1)
         exp_result = ResolvedTransaction(
-            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=ResolvedTransactionMessageContext(),
             do_not_skip=False
         )
@@ -182,7 +180,7 @@ class TestPreparators(TestCase):
     def test_review_simple_resolved_transaction(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -204,7 +202,7 @@ class TestPreparators(TestCase):
     def test_commit_simple_resolved_transaction(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -219,7 +217,7 @@ class TestPreparators(TestCase):
     def test_review_simple_resolved_transaction_paid_too_much(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_OVERPAID_CHECK, pipeline_section_id=-1,
+            **SIMPLE_OVERPAID_CHECK,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -239,7 +237,7 @@ class TestPreparators(TestCase):
     def test_commit_simple_resolved_transaction_paid_too_much_norefund(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_OVERPAID_CHECK, pipeline_section_id=-1,
+            **SIMPLE_OVERPAID_CHECK,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -261,7 +259,7 @@ class TestPreparators(TestCase):
     def test_commit_simple_resolved_transaction_paid_too_much_refund(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_OVERPAID_CHECK, pipeline_section_id=-1,
+            **SIMPLE_OVERPAID_CHECK,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -285,7 +283,7 @@ class TestPreparators(TestCase):
     def test_commit_twice_review(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -310,7 +308,7 @@ class TestPreparators(TestCase):
     def test_commit_twice_noforce(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -340,7 +338,7 @@ class TestPreparators(TestCase):
     def test_commit_twice_withforce(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
@@ -355,7 +353,7 @@ class TestPreparators(TestCase):
         # reload to make sure
         cust = models.SimpleCustomer.objects.get(pk=1)
         resolved_transaction = ResolvedTransaction(
-            **SIMPLE_LOOKUP_TEST_RESULT_DATA, pipeline_section_id=-1,
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=True,
         )
         prep = models.SimpleTransferPreparator(

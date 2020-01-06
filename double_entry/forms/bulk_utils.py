@@ -192,7 +192,6 @@ class ResolvedTransaction(TransactionWithMessages):
     transaction_party_id: int
     amount: Money
     timestamp: datetime.datetime
-    pipeline_section_id: int
     message_context: ResolvedTransactionMessageContext = dataclasses.field(compare=False, hash=False)
     do_not_skip: bool = dataclasses.field(compare=False, hash=False)
 
@@ -269,7 +268,6 @@ class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
         self.error_mixin.error_at_line(self.tinfo.line_no, msg, params)
         super().warning(msg, params)
 
-# TODO: implement APIErrorContext
 
 class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
     transaction_party_model: ClassVar[Type[TP]] = None
@@ -291,8 +289,7 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
         'Skipped processing.'
     )
 
-    def __init__(self, error_context: ErrorMixin, pipeline_section_id: int):
-        self.pipeline_section_id = pipeline_section_id
+    def __init__(self, error_context: ErrorMixin):
         super().__init__(error_context)
 
     def __init_subclass__(cls, *args, abstract=False, **kwargs):
@@ -312,7 +309,6 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
         return self.resolved_transaction_class(
             transaction_party_id=transaction_party_id,
             message_context=RTErrorContextFromMixin(self, tinfo),
-            pipeline_section_id=self.pipeline_section_id,
             do_not_skip=False, **tinfo_dict
         )
 
@@ -1033,13 +1029,9 @@ class PaymentPipelineSection(ErrorContextWrapper, Generic[LE, TP, RT, TI]):
     def transaction_party_queryset(cls):
         raise NotImplementedError
 
-    def __init__(self, error_context: ErrorMixin, pipeline_section_id: int):
-        self.pipeline_section_id = pipeline_section_id
-        super().__init__(error_context)
-
     def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
         resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
-            self.error_context, self.pipeline_section_id
+            self.error_context
         )
         return resolver(parsed_data)
 
@@ -1059,6 +1051,7 @@ class PaymentPipelineSection(ErrorContextWrapper, Generic[LE, TP, RT, TI]):
 
 
 PipelineResolved = List[List[Tuple[TransactionPartyMixin, ResolvedTransaction]]]
+PipelinePrepared = List[List[PreparedTransaction]]
 
 class PaymentPipelineError(ValueError):
     pass
@@ -1066,32 +1059,19 @@ class PaymentPipelineError(ValueError):
 class PaymentPipeline(ParserErrorMixin):
     pipeline_section_classes: List[Type[PaymentPipelineSection]] = []
 
-    def __init__(self, parser=None, resolved: Optional[List[ResolvedTransaction]]=None):
+    def __init__(self, parser=None, resolved: Optional[List[List[ResolvedTransaction]]]=None):
         if parser is None and resolved is None:
             raise PaymentPipelineError(
                 'One of \'parser\' and \'resolved\' must be non-null'
             )
         super().__init__(parser)
         self.pipeline_sections = [
-            cl(self, i) for i, cl in enumerate(self.pipeline_section_classes)
+            cl(self) for cl in self.pipeline_section_classes
         ]
-        pipeline_count = len(self.pipeline_section_classes)
+        self.prepared: Optional[PipelinePrepared] = None
         if resolved is None:
             self.resolved: Optional[PipelineResolved] = None
         else:
-            # divvy up the resolved transactions per pipeline section
-            by_section = [[] for _i in range(pipeline_count)]
-            for tr in resolved:
-                try:
-                    by_section[tr.pipeline_section_id].append(tr)
-                except IndexError:
-                    raise PaymentPipelineError(
-                        '%(id)d is not a valid pipeline section ID' % {
-                            'id': tr.pipeline_section_id
-                        }
-                    )
-
-
             def resolved_for_pipeline(pls, transactions):
                 account_ids = set(r.transaction_party_id for r in transactions)
 
@@ -1104,7 +1084,7 @@ class PaymentPipeline(ParserErrorMixin):
 
             self.resolved = [
                 list(resolved_for_pipeline(*t))
-                for t in zip(self.pipeline_section_classes, by_section)
+                for t in zip(self.pipeline_section_classes, resolved)
             ]
 
     def run(self):
@@ -1118,13 +1098,22 @@ class PaymentPipeline(ParserErrorMixin):
             for p in self.pipeline_sections
         ]
 
+    def resolve(self):
+        self.run()
+
     def review(self):
-        for res, p in zip(self.resolved, self.pipeline_sections):
-            p.review(res)
+        def by_section():
+            for res, p in zip(self.resolved, self.pipeline_sections):
+                prep = p.review(res)
+                yield prep.valid_transactions
+        self.prepared = list(by_section())
 
     def commit(self):
-        for res, p in zip(self.resolved, self.pipeline_sections):
-            p.commit(res)
+        def by_section():
+            for res, p in zip(self.resolved, self.pipeline_sections):
+                prep = p.commit(res)
+                yield prep.valid_transactions
+        self.prepared = list(by_section())
 
 
 class FinancialCSVUploadForm(CSVUploadForm):
