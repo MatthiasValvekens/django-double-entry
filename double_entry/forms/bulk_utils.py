@@ -69,7 +69,7 @@ from double_entry import models as accounting_base, models
 from double_entry.utils import decimal_to_money, consume_with_result
 from double_entry.forms.utils import (
     CSVUploadForm, ErrorMixin,
-    ParserErrorMixin, ErrorContextWrapper,
+    ParserErrorAggregator, ErrorContextWrapper,
 )
 
 logger = logging.getLogger(__name__)
@@ -1029,16 +1029,20 @@ class StandardCreditApportionmentMixin(CreditApportionmentMixin[LE, TP, RT]):
         return self._debt_buckets[debt_key]
 
 
-class PaymentPipelineSection(ErrorContextWrapper, Generic[LE,TP,TI,RT]):
+class PaymentPipelineSection(Generic[LE,TP,TI,RT]):
 
-    def __init__(self, error_context: ErrorMixin,
-                 resolver_class: Type[LedgerResolver[TP, TI, RT]],
-                 ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]]):
-        super().__init__(error_context)
+    def __init__(self, resolver_class: Type[LedgerResolver[TP, TI, RT]],
+                    ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]],
+                    error_context: Optional[ErrorMixin]=None):
         self.resolver_class = resolver_class
         self.ledger_preparator_class = ledger_preparator_class
+        self.error_context = error_context
 
     def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
+        if self.error_context is None:
+            raise PaymentPipelineError(
+                'Cannot use pipeline for resolving without error context.'
+            )
         resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
             self.error_context
         )
@@ -1069,7 +1073,7 @@ PipelineSpec = List[PipelineSectionClass]
 class PaymentPipelineError(ValueError):
     pass
 
-class PaymentPipeline(ParserErrorMixin):
+class PaymentPipeline:
 
     def __init__(self, pipeline_section_classes: PipelineSpec,
                  parser=None, resolved: Optional[List[List[ResolvedTransaction]]]=None):
@@ -1077,9 +1081,15 @@ class PaymentPipeline(ParserErrorMixin):
             raise PaymentPipelineError(
                 'One of \'parser\' and \'resolved\' must be non-null'
             )
-        super().__init__(parser)
+
+        self.parser = parser
+        if parser is not None:
+            self._parser_wrapper = ParserErrorAggregator(parser)
+        else:
+            self._parser_wrapper = None
+
         self.pipeline_sections = [
-            PaymentPipelineSection(self, resolver, preparator)
+            PaymentPipelineSection(resolver, preparator, self._parser_wrapper)
             for resolver, preparator in pipeline_section_classes
         ]
         self.prepared: Optional[PipelinePrepared] = None
@@ -1100,19 +1110,13 @@ class PaymentPipeline(ParserErrorMixin):
                 for t in zip(self.pipeline_sections, resolved)
             ]
 
-    def run(self):
-        """
-        Runs the resolution part of the pipeline.
-        """
+    def resolve(self):
         if self.resolved is not None:
             return
         self.resolved = [
             list(p.resolve(self.parser.parsed_data))
             for p in self.pipeline_sections
         ]
-
-    def resolve(self):
-        self.run()
 
     def review(self):
         def by_section():

@@ -79,21 +79,12 @@ class ErrorContextWrapper(ErrorMixin):
         self.error_context.error_at_lines(line_nos, msg, params)
 
 
-class ParserErrorMixin(ErrorMixin):
+class ParserErrorAggregator(ErrorMixin):
     _ready = False
 
     def __init__(self, parser):
         self.parser = parser
         self._errors: ErrorList = []
-
-    def run(self):
-        return
-
-    def _ensure_ready(self):
-        if not self._ready:
-            self.run()
-        _ready = True
-        return
 
     def error_at_line(self, line_no: int, msg: str, params: Optional[dict]=None):
         self.error_at_lines([line_no], msg, params)
@@ -104,9 +95,8 @@ class ParserErrorMixin(ErrorMixin):
             msg = msg % params
         self._errors.insert(0, (sorted(line_nos), msg))
 
-    @cached_property
+    @property
     def errors(self) -> ErrorList:
-        self._ensure_ready()
         if self.parser is not None:
             parser_errors = [
                 ([lno], err) for lno, err in self.parser.errors
