@@ -222,6 +222,9 @@ class TransactionPartyIndexBuilder(Generic[TP]):
     def execute_query(self):
         raise NotImplementedError
 
+    def base_query_set(self):
+        return self.resolver.base_query_set()
+
 
 class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
     """
@@ -301,6 +304,11 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
     @abc.abstractmethod
     def get_index_builders(self) -> List[TransactionPartyIndexBuilder[TP]]:
         raise NotImplementedError
+
+    @classmethod
+    def base_query_set(cls):
+        return cls.transaction_party_model \
+            ._default_manager.with_debts_and_payments()
 
     def resolve_account(self, tinfo: TI, transaction_party_id) -> RT:
         tinfo_dict = dataclasses.asdict(tinfo)
@@ -1021,13 +1029,14 @@ class StandardCreditApportionmentMixin(CreditApportionmentMixin[LE, TP, RT]):
         return self._debt_buckets[debt_key]
 
 
-class PaymentPipelineSection(ErrorContextWrapper, Generic[LE, TP, RT, TI]):
-    resolver_class: Type[LedgerResolver[TP, TI, RT]]
-    ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]]
+class PaymentPipelineSection(ErrorContextWrapper, Generic[LE,TP,TI,RT]):
 
-    @classmethod
-    def transaction_party_queryset(cls):
-        raise NotImplementedError
+    def __init__(self, error_context: ErrorMixin,
+                 resolver_class: Type[LedgerResolver[TP, TI, RT]],
+                 ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]]):
+        super().__init__(error_context)
+        self.resolver_class = resolver_class
+        self.ledger_preparator_class = ledger_preparator_class
 
     def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
         resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
@@ -1052,30 +1061,34 @@ class PaymentPipelineSection(ErrorContextWrapper, Generic[LE, TP, RT, TI]):
 
 PipelineResolved = List[List[Tuple[TransactionPartyMixin, ResolvedTransaction]]]
 PipelinePrepared = List[List[PreparedTransaction]]
+PipelineSectionClass = Tuple[
+    Type[LedgerResolver[TP, TI, RT]], Type[LedgerEntryPreparator[LE, TP, RT]]
+]
+PipelineSpec = List[PipelineSectionClass]
 
 class PaymentPipelineError(ValueError):
     pass
 
 class PaymentPipeline(ParserErrorMixin):
-    pipeline_section_classes: List[Type[PaymentPipelineSection]] = []
 
-    def __init__(self, parser=None, resolved: Optional[List[List[ResolvedTransaction]]]=None):
+    def __init__(self, pipeline_section_classes: PipelineSpec,
+                 parser=None, resolved: Optional[List[List[ResolvedTransaction]]]=None):
         if parser is None and resolved is None:
             raise PaymentPipelineError(
                 'One of \'parser\' and \'resolved\' must be non-null'
             )
         super().__init__(parser)
         self.pipeline_sections = [
-            cl(self) for cl in self.pipeline_section_classes
+            PaymentPipelineSection(self, resolver, preparator)
+            for resolver, preparator in pipeline_section_classes
         ]
         self.prepared: Optional[PipelinePrepared] = None
         if resolved is None:
             self.resolved: Optional[PipelineResolved] = None
         else:
-            def resolved_for_pipeline(pls, transactions):
+            def resolved_for_pipeline(pls: PaymentPipelineSection, transactions):
                 account_ids = set(r.transaction_party_id for r in transactions)
-
-                accounts = pls.transaction_party_queryset().filter(
+                accounts = pls.resolver_class.base_query_set().filter(
                     pk__in=account_ids
                 )
                 account_ix = {acct.pk: acct for acct in accounts}
@@ -1084,7 +1097,7 @@ class PaymentPipeline(ParserErrorMixin):
 
             self.resolved = [
                 list(resolved_for_pipeline(*t))
-                for t in zip(self.pipeline_section_classes, resolved)
+                for t in zip(self.pipeline_sections, resolved)
             ]
 
     def run(self):

@@ -56,10 +56,6 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder[TP
             self.line_index[string].append(tinfo.line_no)
             return True
 
-    def base_query_set(self):
-        return self.resolver.transaction_party_model \
-            ._default_manager.with_debts_and_payments()
-
     def execute_query(self):
         account_qs, unseen = self.base_query_set().by_payment_tracking_nos(
             self.line_index.keys(), validate_unseen=True
