@@ -1098,11 +1098,15 @@ class PaymentPipeline:
         else:
             def resolved_for_pipeline(pls: PaymentPipelineSection, transactions):
                 account_ids = set(r.transaction_party_id for r in transactions)
+                # no need to hit the DB if we know the result set will be empty
+                if not account_ids:
+                    return
                 accounts = pls.resolver_class.base_query_set().filter(
                     pk__in=account_ids
                 )
                 account_ix = {acct.pk: acct for acct in accounts}
                 for rt in transactions:
+                    # TODO: fail with meaningful error if not found
                     yield account_ix[rt.transaction_party_id], rt
 
             self.resolved = [
@@ -1121,15 +1125,21 @@ class PaymentPipeline:
     def review(self):
         def by_section():
             for res, p in zip(self.resolved, self.pipeline_sections):
-                prep = p.review(res)
-                yield prep.valid_transactions
+                if res:
+                    prep = p.review(res)
+                    yield prep.valid_transactions
+                else:
+                    yield []
         self.prepared = list(by_section())
 
     def commit(self):
         def by_section():
             for res, p in zip(self.resolved, self.pipeline_sections):
-                prep = p.commit(res)
-                yield prep.valid_transactions
+                if res:
+                    prep = p.commit(res)
+                    yield prep.valid_transactions
+                else:
+                    yield []
         self.prepared = list(by_section())
 
 
