@@ -76,9 +76,67 @@ class Event(models.Model):
     name = models.CharField(max_length=100)
     start = models.DateTimeField()
 
+class TicketCustomerQuerySet(base.TransactionPartyQuerySet):
+
+    def with_debt_balances(self):
+        # FIXME: If/when Django decides to drop the ridiculous ban on nested
+        #  aggregate functions, we can just use the superclass implementation.
+
+        cls = self.__class__
+        if cls.DEBT_BALANCE_FIELD in self.query.annotations:
+            return self
+
+        total_ticket_cost = Ticket.objects.filter(
+            reservation__owner_id=OuterRef('pk')
+        ).order_by().values('reservation__owner_id').annotate(
+            _total_ticket_price=Sum(
+                ExpressionWrapper(
+                    F('category__price') * F('count'),
+                    output_field=models.DecimalField()
+                )
+            )
+        ).values('_total_ticket_price')
+
+        total_static_debt = ReservationDebt.objects.filter(
+            owner_id=OuterRef('pk')
+        ).order_by().values('owner_id').annotate(
+            _total_static_debt=Sum('static_price')
+        ).values('_total_static_debt')
+
+        total_paid = ReservationPaymentSplit.objects.filter(
+            reservation__owner_id=OuterRef('pk')
+        ).order_by().values('reservation__owner_id').annotate(
+            _total_paid=Sum('amount')
+        ).values('_total_paid')
+
+        return self.annotate(
+            total_ticket_cost=Coalesce(
+                Subquery(total_ticket_cost),
+                Value(Decimal('0.00')),
+                output_field=models.DecimalField()
+            ),
+            total_static_debt=Coalesce(
+                Subquery(total_static_debt),
+                Value(Decimal('0.00')),
+                output_field=models.DecimalField()
+            ),
+            total_paid=Coalesce(
+                Subquery(total_paid),
+                Value(Decimal('0.00')),
+                output_field=models.DecimalField()
+            )
+        ).annotate(**{
+            cls.DEBT_BALANCE_FIELD: (
+                    F('total_ticket_cost') + F('total_static_debt')
+                    - F('total_paid')
+            )
+        })
+
 class TicketCustomer(base.TransactionPartyMixin):
     payment_tracking_prefix = 2
     name = models.CharField(max_length=100)
+
+    objects = TicketCustomerQuerySet.as_manager()
 
 
 class ReservationDebtQuerySet(base.BaseDebtQuerySet):
@@ -110,6 +168,12 @@ class ReservationDebtQuerySet(base.BaseDebtQuerySet):
             )
         })
 
+BaseDebtReservationManager = models.Manager.from_queryset(
+    ReservationDebtQuerySet
+)
+class ReservationDebtManager(BaseDebtReservationManager):
+    def get_queryset(self):
+        return super().get_queryset().with_total_price()
 
 class ReservationDebt(base.BaseDebtRecord):
     TOTAL_AMOUNT_FIELD_COLUMN = ReservationDebtQuerySet.TOTAL_PRICE_FIELD
@@ -122,7 +186,7 @@ class ReservationDebt(base.BaseDebtRecord):
         decimal_places=4, max_digits=19, null=True, blank=True
     )
 
-    objects = ReservationDebtQuerySet.as_manager()
+    objects = ReservationDebtManager()
 
     @property
     def total_amount(self):
@@ -140,6 +204,10 @@ class ReservationDebt(base.BaseDebtRecord):
                  for ticket in self.reservation.tickets.all()),
                 Money(Decimal('0.00'), settings.DEFAULT_CURRENCY)
             )
+
+    @total_amount.setter
+    def total_amount(self, value):
+        self.static_price = value.amount
 
 class Reservation(ReservationDebt):
     debt = models.OneToOneField(
@@ -184,10 +252,12 @@ class Ticket(models.Model):
     count = models.PositiveSmallIntegerField()
 
 
-class ReservationPayment(base.BasePaymentRecord, base.ConcreteAmountMixin):
+class ReservationPayment(base.BasePaymentRecord, base.ConcreteAmountMixin, base.DuplicationProtectionMixin):
+    dupcheck_signature_fields = ('customer',)
     customer = models.ForeignKey(
         TicketCustomer, on_delete=models.CASCADE, related_name='payments'
     )
+    objects = PaymentQuerySet.as_manager()
 
 class ReservationPaymentSplit(base.BaseDebtPaymentSplit):
 
@@ -199,8 +269,6 @@ class ReservationPaymentSplit(base.BaseDebtPaymentSplit):
         ReservationPayment, related_name='splits', on_delete=models.CASCADE
     )
 
-# TODO: lookups on this testing model are broken because the default manager
-#  does not compute ticket prices
 class ReservationTransferResolver(TransferResolver[TicketCustomer,
                                               BankTransactionInfo,
                                               ResolvedTransaction]):
