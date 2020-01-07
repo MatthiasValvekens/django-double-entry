@@ -27,8 +27,16 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             amount=Decimal(raw['amount']), currency=raw['currency']
         )
         del raw['currency']
-        pipeline_section_id = int(raw['pipeline_section_id'])
-        del raw['pipeline_section_id']
+        try:
+            pipeline_section_id = int(raw['pipeline_section_id'])
+            del raw['pipeline_section_id']
+        except KeyError:
+            if len(self.pipeline_spec) == 1:
+                pipeline_section_id = 0
+            else:
+                raise api_utils.APIError(
+                    'pipeline_section_id is required on all transactions'
+                )
         resolver, preparator = self.pipeline_spec[pipeline_section_id]
         rt_class = resolver.resolved_transaction_class
         if 'do_not_skip' not in raw:
