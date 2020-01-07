@@ -2,7 +2,9 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import models
-from django.db.models import OuterRef, Sum, ExpressionWrapper, F, Subquery
+from django.db.models import (
+    OuterRef, Sum, ExpressionWrapper, F, Subquery, Value
+)
 from django.db.models.functions import Coalesce
 from djmoney.models.fields import MoneyField
 from djmoney.money import Money
@@ -78,6 +80,7 @@ class Event(models.Model):
 
 class TicketCustomerQuerySet(base.TransactionPartyQuerySet):
 
+    # noinspection DuplicatedCode
     def with_debt_balances(self):
         # FIXME: If/when Django decides to drop the ridiculous ban on nested
         #  aggregate functions, we can just use the superclass implementation.
@@ -143,6 +146,7 @@ class ReservationDebtQuerySet(base.BaseDebtQuerySet):
     TOTAL_PRICE_FIELD = 'total_price_fromdb'
     FACE_VALUE_FIELD = 'face_value_fromdb'
 
+    # noinspection DuplicatedCode
     def with_total_price(self):
         cls = self.__class__
         actual_reservation_query = Ticket.objects.filter(
