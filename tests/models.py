@@ -11,8 +11,7 @@ from double_entry import models as base
 from double_entry.forms.bulk_utils import ResolvedTransaction
 from double_entry.forms.csv import BankTransactionInfo
 from double_entry.forms.transfers import (
-    TransferResolver,
-    TransferPaymentPreparator,
+    TransferResolver, TransferPaymentPreparator,
 )
 from double_entry.utils import decimal_to_money
 
@@ -32,13 +31,18 @@ class SimpleCustomerDebt(base.BaseDebtRecord, base.ConcreteAmountMixin):
 class SimpleCustomerPaymentQuerySet(base.BasePaymentQuerySet, base.DuplicationProtectedQuerySet):
     pass
 
+
+class PaymentQuerySet(base.DuplicationProtectedQuerySet, base.BasePaymentQuerySet):
+    pass
+
 class SimpleCustomerPayment(base.BasePaymentRecord, base.ConcreteAmountMixin, base.DuplicationProtectionMixin):
     dupcheck_signature_fields = ('creditor',)
-    objects = SimpleCustomerPaymentQuerySet.as_manager()
     creditor = models.ForeignKey(
         SimpleCustomer, on_delete=models.CASCADE,
         related_name='payments'
     )
+
+    objects = PaymentQuerySet.as_manager()
 
 
 class SimpleCustomerPaymentSplit(base.BaseDebtPaymentSplit):
@@ -194,3 +198,18 @@ class ReservationPaymentSplit(base.BaseDebtPaymentSplit):
     payment = models.ForeignKey(
         ReservationPayment, related_name='splits', on_delete=models.CASCADE
     )
+
+# TODO: lookups on this testing model are broken because the default manager
+#  does not compute ticket prices
+class ReservationTransferResolver(TransferResolver[TicketCustomer,
+                                              BankTransactionInfo,
+                                              ResolvedTransaction]):
+    transaction_party_model = TicketCustomer
+    transaction_info_class = BankTransactionInfo
+    resolved_transaction_class = ResolvedTransaction
+
+class ReservationTransferPreparator(TransferPaymentPreparator[
+                                   ReservationPayment,
+                                   TicketCustomer,
+                                   ResolvedTransaction]):
+    transaction_party_model = TicketCustomer

@@ -1,18 +1,25 @@
+import json
+
 from django.test import TestCase
 from djmoney.money import Money
+
+from double_entry.forms import bulk_utils
 from double_entry.forms.bulk_utils import (
     ResolvedTransactionMessageContext,
     ResolvedTransaction,
     ResolvedTransactionVerdict,
 )
 from double_entry.models import GnuCashCategory
-from tests import models
-from tests.test_csv import PARSE_TEST_DATETIME, SIMPLE_LOOKUP_TEST_RESULT_DATA
+from . import models, views as test_views
+from .test_csv import PARSE_TEST_DATETIME, SIMPLE_LOOKUP_TEST_RESULT_DATA
 
 SIMPLE_OVERPAID_CHECK = {
     'transaction_party_id': 1, 'amount': Money(40, 'EUR'),
     'timestamp': PARSE_TEST_DATETIME,
 }
+
+PIPELINE_SIMPLE_SECTION = 0
+PIPELINE_TICKET_SECTION = 1
 
 
 # TODO: test these with queryset sealing
@@ -212,3 +219,44 @@ class TestPreparators(TestCase):
             creditor_id=1
         ).count()
         self.assertEqual(pmt_count, 2)
+
+
+# noinspection DuplicatedCode
+class TestSubmissionAPI(TestCase):
+
+    fixtures = ['reservations.json', 'simple.json']
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.api_token = test_views.TestAPITokenGenerator(
+            uid='testtesttesttesttest',
+            display_name='test', lifespan=0
+        ).make_base64_token()[0]
+        cls.endpoint = test_views.pipeline_endpoint.url()
+
+    def test_simple_submission(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'api_token': self.api_token,
+                'transactions': [
+                    {
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '32.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+        self.assertTrue(res['committed'])
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
