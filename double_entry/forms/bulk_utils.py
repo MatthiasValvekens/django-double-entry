@@ -503,9 +503,11 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
         # initialise ORM objects when possible, and collect the valid ones
         def indiv_transactions() -> PreparedTransactionList:
             acct: TransactionPartyMixin
+            t: ResolvedTransaction
             for acct, t in resolved:
                 kwargs = self.model_kwargs_for_transaction(acct, t)
                 if kwargs is None:
+                    t.discard()
                     continue
                 entry: LE = self.model(**kwargs)
                 entry.spoof_matched_balance(Decimal('0.00'))
@@ -717,6 +719,7 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
     # ensure that this happens.
     credit_remaining = debt_remaining = decimal_to_money(Decimal('0.00'))
     while True:
+        # noinspection DuplicatedCode
         try:
             # look for some unpaid debt
             while not debt_remaining or debt.is_refund:
@@ -744,6 +747,7 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
                     results.fully_used_payments.append(p)
             break
 
+        # noinspection DuplicatedCode
         try:
             # keep trying payments until we find one that is recent enough
             # to cover the current debt.
