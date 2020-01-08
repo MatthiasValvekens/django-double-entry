@@ -67,6 +67,23 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             message_context=APIErrorContext(transaction_id=transaction_id)
         )
 
+    @classmethod
+    def format_transaction_response(cls, transaction: bulk_utils.ResolvedTransaction,
+                                    transaction_id=None, commit=False):
+        message_context = transaction.message_context
+        if transaction_id is None:
+            assert isinstance(message_context, APIErrorContext)
+            transaction_id = message_context.transaction_id
+        res = {
+            'transaction_id': transaction_id,
+            'errors': message_context.transaction_errors,
+            'warnings': message_context.transaction_warnings,
+            'verdict': message_context.verdict,
+        }
+        if commit:
+            res['committed'] = transaction.to_commit
+        return res
+
     def post(self, request, *, transactions: list, commit: bool=True):
         by_section = [
             [] for _i in range(len(self.pipeline_spec))
@@ -107,16 +124,7 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             # transaction_list now carries all the error data from
             #  the pipeline, if applicable
             for tr in transaction_list:
-                message_context = tr.message_context
-                assert isinstance(message_context, APIErrorContext)
-                res = {
-                    'transaction_id': message_context.transaction_id,
-                    'errors': message_context.transaction_errors,
-                    'warnings': message_context.transaction_warnings,
-                    'verdict': message_context.verdict,
-                }
-                if commit:
-                    res['committed'] = tr.to_commit
+                res = self.format_transaction_response(tr, commit=True)
                 yield res
 
         return JsonResponse(
