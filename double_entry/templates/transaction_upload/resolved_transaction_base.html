@@ -1,0 +1,11 @@
+{% load i18n bootstrap4 transaction_formatting %}
+<tr class="resolved-transaction" id="trans-{{ pipeline_section }}-{{ transaction_id }}" {{ transaction|rt_html_tags }}>
+    {% block transaction_columns %}
+    <td>{{ account }}</td>
+    <td>{{ transaction.amount }}</td>
+    <td>{{ transaction.timestamp }}</td>
+    {% endblock %}
+    {% block transaction_feedback %}
+        <td class="transaction-feedback"></td>
+    {% endblock %}
+</tr>

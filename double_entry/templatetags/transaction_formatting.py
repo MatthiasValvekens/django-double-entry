@@ -27,14 +27,17 @@ def rt_html_tags(resolved_transaction: ResolvedTransaction):
     for attr in resolved_transaction.html_ignore():
         del attr_dict[attr]
 
+    # TODO: make this hookable in some way? Might do this if the need arises,
+    #  but seems like overkill for now.
     def attrs():
         for name, val in attr_dict.items():
             name = normalise_attr_name(name)
-            if isinstance(val, Money):
-                yield 'money-amt-' + name, val.amount
-                yield 'money-cur-' + name, val.currency
+            if name == 'amount':
+                assert isinstance(val, Money)
+                yield 'amount', val.amount
+                yield 'currency', val.currency
             elif isinstance(val, datetime.datetime):
-                yield 'dt-' + name, val.isoformat()
+                yield name, val.isoformat()
             else:
                 yield name, val
 

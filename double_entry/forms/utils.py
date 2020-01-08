@@ -6,6 +6,7 @@ from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.forms.models import ModelForm
+from django.utils.deconstruct import deconstructible
 from django.utils.functional import cached_property
 from django.utils.translation import ugettext_lazy as _
 
@@ -111,6 +112,39 @@ class ParserErrorAggregator(ErrorMixin):
         )
 
 
+@deconstructible
+class FileSizeValidator:
+
+    def __init__(self, mib=0, kib=0, b=0):
+        self.mib = mib
+        self.kib = kib
+        self.b = b
+        self.size_limit = ((mib * 1024) + kib) * 1024 + b
+
+    def __eq__(self, other):
+        return isinstance(other, FileSizeValidator) \
+               and self.mib == other.mib \
+               and self.kib == other.kib \
+               and self.b == other.b
+
+    def __call__(self, upl_file):
+        if upl_file.size > self.size_limit:
+            # has to happen here for the gettext calls to work
+            fmt_parts = [
+                _('%d MiB') % self.mib if self.mib > 0 else '',
+                _('%d KiB') % self.kib if self.kib > 0 else '',
+                _('%d bytes') % self.b if self.b > 0 else ''
+            ]
+            fmt_limit = ', '.join(p for p in fmt_parts if p)
+            raise ValidationError(
+                _(
+                    'Uploaded file larger than %(limit)s.' % {
+                        'limit': fmt_limit
+                    }
+                )
+            )
+
+
 class CSVUploadForm(forms.Form):
 
     def _validate_csv(self, field):
@@ -119,11 +153,6 @@ class CSVUploadForm(forms.Form):
         # .csv, text/csv
         f = self.cleaned_data[field]
         if f is not None:
-            if f.size > settings.MAX_CSV_UPLOAD:
-                raise ValidationError(
-                    _('Uploaded .csv file too large (> 1 MiB).')
-                )
-
             if not f.name.endswith('.csv'):
                 raise ValidationError(
                     _('Please upload a .csv file.')

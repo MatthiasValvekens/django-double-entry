@@ -1,5 +1,7 @@
 SECRET_KEY = 'fake-key'
 
+DEBUG = True
+
 INSTALLED_APPS = [
     'django.contrib.auth',
     'django.contrib.sessions',
@@ -47,3 +49,5 @@ PASSWORD_HASHERS  = [
 
 USE_TZ = True
 DEFAULT_CURRENCY = 'EUR'
+
+STATIC_URL = '/static/'

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload transactions</title>
+</head>
+<body>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="hidden" name="form-selected" value="{{ form.prefix }}" />
+        <div class="row mb-2">
+            {% if form.errors %}{{ form.errors.as_ul }}{% endif %}
+            <div class="col-md-6">{{ form.csv }}</div>
+            <input type="submit" value="Review transactions"/>
+        </div>
+    </form>
+</body>
+</html>

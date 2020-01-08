@@ -1,0 +1,19 @@
+{% load i18n %}
+{% for pipeline_section, name, resolved_list in resolved_by_section %}
+    <h2>{{ name }}</h2>
+    <table class="transaction-upload-results" data-pipeline-section-id="{{ pipeline_section }}" id="{{ pipeline_section_id_prefix|default:'pipeline-section' }}-{{ pipeline_section }}">
+        <thead>
+            {% block transaction_column_headers %}
+                <th>{% trans "Transaction party" %}</th>
+                <th>{% trans "Amount" %}</th>
+                <th>{% trans "Timestamp" %}</th>
+            {% endblock %}
+            <th>{% trans "Feedback" %}</th>
+        </thead>
+        <tbody>
+            {% for transaction_id, account, resolved in resolved_list %}
+                {% include "transaction_upload/resolved_transaction_base.html" %}
+            {% endfor %}
+        </tbody>
+    </table>
+{% endfor %}

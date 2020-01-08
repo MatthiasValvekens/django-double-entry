@@ -6,16 +6,18 @@ import pytz
 from io import StringIO
 from typing import List, Optional, Set
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from djmoney.money import Money
 
 from double_entry.forms.bulk_utils import (
     ResolvedTransaction,
     ResolvedTransactionMessageContext,
+    FinancialCSVUploadForm,
 )
 from double_entry.forms.csv import BankTransactionInfo
 from double_entry.forms.utils import ErrorMixin
-from . import models
+from . import models, views
 from double_entry.forms import csv as forms_csv
 
 # OGMs for all our test users in the database
@@ -161,5 +163,29 @@ class TestBankCSVs(TestCase):
             message_context=ResolvedTransactionMessageContext(),
             do_not_skip=False
         )
+        self.assertEqual(results[0], (cust, exp_result))
+        self.assertEqual(results[1], (cust, exp_result))
+
+# noinspection DuplicatedCode
+class TestCSVForms(TestCase):
+    fixtures = ['simple.json', 'reservations.json']
+
+    def test_upload_form(self):
+        csv_file = SimpleUploadedFile(
+            'transfers.csv', KBC_SIMPLE_LOOKUP_TEST.encode('utf-8')
+        )
+        form = FinancialCSVUploadForm(
+            {}, {'csv': csv_file}, pipeline_spec=views.test_transfer_pipeline,
+            csv_parser_class=forms_csv.KBCCSVParser
+        )
+        form.is_valid()
+        form.review()
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        exp_result = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
+            message_context=ResolvedTransactionMessageContext(),
+            do_not_skip=False
+        )
+        results = form.resolved[0]
         self.assertEqual(results[0], (cust, exp_result))
         self.assertEqual(results[1], (cust, exp_result))

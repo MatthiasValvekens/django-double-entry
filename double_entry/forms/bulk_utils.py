@@ -42,7 +42,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from collections import defaultdict, deque
 from enum import IntFlag
-from itertools import chain
 from typing import (
     TypeVar, Sequence, Generator, Type, Tuple,
     Iterator, Optional, Iterable, cast, List,
@@ -51,8 +50,6 @@ from typing import (
 
 from django import forms
 from django.conf import settings
-from django.core.exceptions import SuspiciousOperation
-from django.db import transaction as db_transaction
 from django.db.models import ForeignKey
 from django.utils import timezone
 from django.utils.functional import cached_property
@@ -70,6 +67,7 @@ from double_entry.utils import decimal_to_money, consume_with_result
 from double_entry.forms.utils import (
     CSVUploadForm, ErrorMixin,
     ParserErrorAggregator, ErrorContextWrapper,
+    FileSizeValidator,
 )
 
 __all__ = [
@@ -1073,7 +1071,8 @@ class PaymentPipelineSection(Generic[LE,TP,TI,RT]):
         return preparator
 
 
-PipelineResolved = List[List[Tuple[TransactionPartyMixin, ResolvedTransaction]]]
+ResolvedSection = List[Tuple[TransactionPartyMixin, ResolvedTransaction]]
+PipelineResolved = List[ResolvedSection]
 PipelinePrepared = List[List[PreparedTransaction]]
 PipelineSectionClass = Tuple[
     Type[LedgerResolver[TP, TI, RT]], Type[LedgerEntryPreparator[LE, TP, RT]]
@@ -1085,7 +1084,7 @@ class PaymentPipelineError(ValueError):
 
 class PaymentPipeline:
 
-    def __init__(self, pipeline_section_classes: PipelineSpec,
+    def __init__(self, pipeline_spec: PipelineSpec,
                  parser=None, resolved: Optional[List[List[ResolvedTransaction]]]=None):
         if parser is None and resolved is None:
             raise PaymentPipelineError(
@@ -1100,7 +1099,7 @@ class PaymentPipeline:
 
         self.pipeline_sections = [
             PaymentPipelineSection(resolver, preparator, self._parser_wrapper)
-            for resolver, preparator in pipeline_section_classes
+            for resolver, preparator in pipeline_spec
         ]
         self.prepared: Optional[PipelinePrepared] = None
         if resolved is None:
@@ -1154,53 +1153,30 @@ class PaymentPipeline:
 
 
 class FinancialCSVUploadForm(CSVUploadForm):
-    pipeline_class: Type[PaymentPipeline]
-    upload_field_label = None
+    csv = forms.FileField(
+        validators=[FileSizeValidator(
+            b=getattr(settings, 'MAX_CSV_UPLOAD', 1024 * 1024)
+        )]
+    )
     csv_parser_class = None
 
-    csv = forms.FileField()
-
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, pipeline_spec: PipelineSpec,
+                 csv_parser_class: Type['FinancialCSVParser'],
+                 upload_field_label: str=_('Upload .csv'), **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['csv'].label = self.upload_field_label
+        self.fields['csv'].label = upload_field_label
+        if self.csv_parser_class is None:
+            self.csv_parser_class = csv_parser_class
+        self.pipeline_spec = pipeline_spec
+        self.resolved = None
 
-    # is the most common use case
-    @property
-    def ledger_preparator(self):
-        assert len(self.ledger_preparator_classes) == 1
-        return self.ledger_preparators[0]
-
-    def review(self) -> List[ResolvedTransaction]:
+    def review(self):
         parser: FinancialCSVParser = self.cleaned_data['csv']
-        pipeline = self.pipeline_class(parser)
-        pipeline.review()
-        assert pipeline.resolved is not None
-        return list(
-            chain(*(res for tp, res in pipeline.resolved))
+        pipeline = PaymentPipeline(
+            pipeline_spec=self.pipeline_spec, parser=parser
         )
-
-    def render_confirmation_page(self, request, context=None):
-        raise NotImplementedError
-
-    @classmethod
-    def submit_confirmation(cls, post_data):
-        # call save() on the right formsets after user confirmation
-        formsets = [
-            prep.formset_class(post_data, prefix=prep.formset_prefix)
-            for prep in cls.ledger_preparator_classes 
-        ]
-
-        dirty = False
-        for formset in formsets:
-            # this means someone tampered with the POST data,
-            # so we have no obligation to give a nice response
-            if not formset.is_valid():
-                logger.error(formset.errors)
-                dirty = True
-
-        if dirty:
-            raise SuspiciousOperation()
-
-        with db_transaction.atomic():
-            for formset in formsets:
-                formset.save()
+        pipeline.resolve()
+        pipeline.review()
+        # the PreparedTransactions aren't directly necessary for now
+        assert pipeline.resolved is not None
+        self.resolved = pipeline.resolved

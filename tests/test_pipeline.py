@@ -425,18 +425,14 @@ class TestSubmissionAPI(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.api_token = test_views.TestAPITokenGenerator(
-            uid='testtesttesttesttest',
-            display_name='test', lifespan=0
-        ).make_base64_token()[0]
         cls.endpoint = test_views.pipeline_endpoint.url()
 
     def test_simple_submission(self):
         response = self.client.post(
             self.endpoint, data={
-                'api_token': self.api_token,
                 'transactions': [
                     {
+                        'transaction_id': 'sec-0-trans-0',
                         'transaction_party_id': 1,
                         'timestamp': PARSE_TEST_DATETIME,
                         'amount': '32.00',
@@ -461,9 +457,9 @@ class TestSubmissionAPI(TestCase):
     def test_simple_ticket_submission(self):
         response = self.client.post(
             self.endpoint, data={
-                'api_token': self.api_token,
                 'transactions': [
                     {
+                        'transaction_id': 'sec-1-trans-0',
                         'transaction_party_id': 1,
                         'timestamp': PARSE_TEST_DATETIME,
                         'amount': '32.00',

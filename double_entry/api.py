@@ -12,6 +12,14 @@ from double_entry.forms import bulk_utils
 
 __all__ = ['register_pipeline_endpoint']
 
+
+class APIErrorContext(bulk_utils.ResolvedTransactionMessageContext):
+
+    def __init__(self, transaction_id: str):
+        super().__init__()
+        self.transaction_id = transaction_id
+
+
 class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
     pipeline_spec: bulk_utils.PipelineSpec = None
     endpoint_name = 'pipeline_submit'
@@ -21,8 +29,9 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
         if not abstract and cls.pipeline_spec is None:
             raise TypeError
 
-    # TODO: this can be simplified once we have better dataclass support in webauth.api_utils
     def shape_resolved_transaction(self, raw: dict):
+        transaction_id = raw['transaction_id']
+        del raw['transaction_id']
         raw['amount'] = Money(
             amount=Decimal(raw['amount']), currency=raw['currency']
         )
@@ -55,7 +64,7 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
                 raw[ts_field] = ts.astimezone(pytz.utc)
         return pipeline_section_id, rt_class(
             **raw,
-            message_context=bulk_utils.ResolvedTransactionMessageContext()
+            message_context=APIErrorContext(transaction_id=transaction_id)
         )
 
     def post(self, request, *, transactions: list, commit: bool=True):
@@ -97,12 +106,14 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
         def pipeline_responses():
             # transaction_list now carries all the error data from
             #  the pipeline, if applicable
-            for ix, tr in enumerate(transaction_list):
+            for tr in transaction_list:
+                message_context = tr.message_context
+                assert isinstance(message_context, APIErrorContext)
                 res = {
-                    'index': ix,
-                    'errors': tr.message_context.transaction_errors,
-                    'warnings': tr.message_context.transaction_warnings,
-                    'verdict': tr.message_context.verdict,
+                    'transaction_id': message_context.transaction_id,
+                    'errors': message_context.transaction_errors,
+                    'warnings': message_context.transaction_warnings,
+                    'verdict': message_context.verdict,
                 }
                 if commit:
                     res['committed'] = tr.to_commit
