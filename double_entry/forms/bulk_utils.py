@@ -736,6 +736,7 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
                     if not debt_remaining:
                         # report debt as fully paid
                         results.fully_paid_debts.append(debt)
+                        debt.spoof_matched_balance(debt.total_amount)
                     else:
                         # this shouldn't happen, but let's
                         # cover our collective asses
@@ -767,6 +768,7 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
                         results.remaining_payments.append(payment)
                     else:
                         results.fully_used_payments.append(payment)
+                        payment.spoof_matched_balance(payment.total_amount)
                 payment = next(payments_iter)
                 credit_remaining = payment.credit_remaining
 

@@ -254,12 +254,19 @@ class DoubleBookInterface(models.Model):
             )['a']
 
     def spoof_matched_balance(self, amount):
+        if isinstance(amount, Money):
+            amount = amount.amount
         setattr(
             self, DoubleBookQuerySet.MATCHED_BALANCE_FIELD, amount
+        )
+        setattr(
+            self, DoubleBookQuerySet.UNMATCHED_BALANCE_FIELD,
+            self.total_amount.amount - amount
         )
         try:
             # invalidate cache
             del self.__dict__['matched_balance']
+            del self.__dict__['unmatched_balance']
         except KeyError:
             pass
 

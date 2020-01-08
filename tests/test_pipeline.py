@@ -51,6 +51,49 @@ class TestSimplePreparator(TestCase):
             error_context.verdict, ResolvedTransactionVerdict.COMMIT
         )
 
+    def test_review_simple_resolved_transaction_underpay(self):
+        error_context = ResolvedTransactionMessageContext()
+        data = deepcopy(SIMPLE_LOOKUP_TEST_RESULT_DATA)
+        data['amount'].amount /= 4
+        resolved_transaction = ResolvedTransaction(
+            **data, message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.review()
+        self.assertEqual(len(error_context.transaction_warnings), 0)
+        self.assertEqual(len(error_context.transaction_errors), 0)
+        self.assertEqual(len(prep.valid_transactions), 1)
+        pt, = prep.valid_transactions
+        le: models.SimpleCustomerPayment = pt.ledger_entry
+        self.assertEqual(le.total_amount, resolved_transaction.amount)
+        self.assertEqual(le.credit_remaining, Money(0, 'EUR'))
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.COMMIT
+        )
+
+    def test_commit_simple_resolved_transaction_underpay(self):
+        error_context = ResolvedTransactionMessageContext()
+        data = deepcopy(SIMPLE_LOOKUP_TEST_RESULT_DATA)
+        data['amount'].amount /= 4
+        resolved_transaction = ResolvedTransaction(
+            **data, message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.commit()
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertEqual(debt.balance, Money('24', 'EUR'))
+        le: models.SimpleCustomerPayment = models.SimpleCustomerPayment.objects \
+            .with_debts().get(creditor_id=1)
+        self.assertEqual(le.total_amount, resolved_transaction.amount)
+        self.assertEqual(le.credit_remaining, Money(0, 'EUR'))
+
     def test_commit_simple_resolved_transaction(self):
         error_context = ResolvedTransactionMessageContext()
         resolved_transaction = ResolvedTransaction(
