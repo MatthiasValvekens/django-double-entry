@@ -67,8 +67,6 @@ class SimpleTransferResolver(TransferResolver[SimpleCustomer,
                                               BankTransactionInfo,
                                               ResolvedTransaction]):
     transaction_party_model = SimpleCustomer
-    transaction_info_class = BankTransactionInfo
-    resolved_transaction_class = ResolvedTransaction
 
 class SimpleTransferPreparator(TransferPaymentPreparator[
                                         SimpleCustomerPayment,
@@ -198,6 +196,7 @@ class ReservationDebt(base.BaseDebtRecord):
 
     objects = ReservationDebtManager()
 
+    # noinspection DuplicatedCode
     @property
     def total_amount(self):
         if self.static_price is not None:
@@ -283,8 +282,6 @@ class ReservationTransferResolver(TransferResolver[TicketCustomer,
                                               BankTransactionInfo,
                                               ResolvedTransaction]):
     transaction_party_model = TicketCustomer
-    transaction_info_class = BankTransactionInfo
-    resolved_transaction_class = ResolvedTransaction
 
 class ReservationTransferPreparator(TransferPaymentPreparator[
                                    ReservationPayment,

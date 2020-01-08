@@ -153,9 +153,6 @@ class ResolvedTransactionMessageContext:
             c.warning(msg, params)
 
     # XXX Hack to make asdict() work on ResolvedTransactions
-    def __copy__(self):
-        return self
-
     def __deepcopy__(self, memodict=None):
         return self
 
@@ -289,8 +286,8 @@ class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
 
 class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
     transaction_party_model: ClassVar[Type[TP]] = None
-    transaction_info_class: ClassVar[Type[TI]] = None
-    resolved_transaction_class: ClassVar[Type[RT]] = None
+    transaction_info_class: ClassVar[Type[TI]] = TransactionInfo
+    resolved_transaction_class: ClassVar[Type[RT]] = ResolvedTransaction
 
     unknown_account_message = _(
         'Transaction account %(account)s unknown. '
@@ -329,6 +326,7 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
         tinfo_dict = dataclasses.asdict(tinfo)
         del tinfo_dict['account_lookup_str']
         del tinfo_dict['line_no']
+        # noinspection PyArgumentList
         return self.resolved_transaction_class(
             transaction_party_id=transaction_party_id,
             message_context=RTErrorContextFromMixin(self, tinfo),

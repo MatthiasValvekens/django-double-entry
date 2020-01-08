@@ -6,7 +6,7 @@ from django.utils.translation import ugettext_lazy as _
 
 import double_entry.utils
 from double_entry import models
-from double_entry.forms.csv import TransactionInfo
+from double_entry.forms.csv import TransactionInfo, BankTransactionInfo
 from double_entry.models import TransactionPartyMixin
 from double_entry.forms import bulk_utils
 
@@ -81,6 +81,7 @@ class TransferTransactionIndexBuilder(bulk_utils.TransactionPartyIndexBuilder[TP
 
 
 class TransferResolver(bulk_utils.LedgerResolver[TP, TI, RT], abstract=True):
+    transaction_info_class = BankTransactionInfo
 
     def get_index_builders(self):
         tpm = self.__class__.transaction_party_model
