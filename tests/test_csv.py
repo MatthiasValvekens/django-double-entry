@@ -197,5 +197,5 @@ class TestCSVForms(TestCase):
         response = self.client.post(
             reverse('kbc_upload'), data={ 'csv': csv_file }
         )
-        self.assertContains(response, 'Asp￿én', count=2)
+        self.assertContains(response, 'Aspén', count=2)
         print(response.content.decode('utf-8'))
