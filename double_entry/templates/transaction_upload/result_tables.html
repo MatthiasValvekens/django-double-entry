@@ -3,15 +3,17 @@
     <h2>{{ name }}</h2>
     <table class="transaction-upload-results" data-pipeline-section-id="{{ pipeline_section }}" id="{{ pipeline_section_id_prefix|default:'pipeline-section' }}-{{ pipeline_section }}">
         <thead>
-            {% block transaction_column_headers %}
-                <th>{% trans "Transaction party" %}</th>
-                <th>{% trans "Amount" %}</th>
-                <th>{% trans "Timestamp" %}</th>
-            {% endblock %}
-            <th>{% trans "Feedback" %}</th>
+            <tr>
+                {% block transaction_column_headers %}
+                    <th>{% trans "Transaction party" %}</th>
+                    <th>{% trans "Amount" %}</th>
+                    <th>{% trans "Timestamp" %}</th>
+                {% endblock %}
+                <th>{% trans "Feedback" %}</th>
+            </tr>
         </thead>
         <tbody>
-            {% for transaction_id, account, resolved in resolved_list %}
+            {% for transaction_id, account, transaction in resolved_list %}
                 {% include "transaction_upload/resolved_transaction_base.html" %}
             {% endfor %}
         </tbody>

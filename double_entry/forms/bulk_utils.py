@@ -152,6 +152,13 @@ class ResolvedTransactionMessageContext:
         for c in contexts:
             c.warning(msg, params)
 
+    # XXX Hack to make asdict() work on ResolvedTransactions
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memodict=None):
+        return self
+
 
 class TransactionWithMessages:
     message_context: ResolvedTransactionMessageContext

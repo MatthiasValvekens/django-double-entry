@@ -1,5 +1,3 @@
-const endpoint_url = $('#pipeline-endpoint-url').attr('data-url');
-
 function collectTransactions(elementId) {
     let collection = $(`#${elementId}`);
     let pipelineSectionId = collection.attr('data-pipeline-section-id');
@@ -9,12 +7,13 @@ function collectTransactions(elementId) {
             pipeline_section_id: pipelineSectionId,
             transaction_id: row_id
         };
-        $.each(this.attributes, function (attr) {
+        $.each(this.attributes, function (i, attr) {
             if(attr.name.startsWith('data-') && attr.specified) {
-                let parameterName = attr.name.substring(5).replace('-', '_');
+                let parameterName = attr.name.substring(5).replace(/-/g, '_');
                 row_data[parameterName] = attr.value;
             }
         });
+        return row_data;
     }).get();
 }
 
@@ -38,24 +37,22 @@ function processResponse({transaction_id, errors, warnings, verdict}) {
     // TODO: make this look nice
     let errorFeedback = "";
     if(errors)
-        return `<ul class="transaction-errors">${errors.map(err => `<li>${err}</li>`).concat()}</ul>`;
+        errorFeedback = `<ul class="transaction-errors">${errors.map(err => `<li>${err}</li>`).concat()}</ul>`;
     let warningFeedback = "";
     if(warnings)
-        return `<ul class="transaction-warnings">${warnings.map(err => `<li>${err}</li>`).concat()}</ul>`;
+        warningFeedback = `<ul class="transaction-warnings">${warnings.map(err => `<li>${err}</li>`).concat()}</ul>`;
     let element = $(`#${transaction_id} > .transaction-feedback`);
     element.addClass(verdict_class);
-    element.html(
-        [successFeedback,warningFeedback,errorFeedback].join('<br/>')
-    );
+    let feedback_html = [successFeedback,warningFeedback,errorFeedback].join('<br/>');
+    element.html(feedback_html);
 }
 
-function submitTransactions(elementIds, commit=true, responseCallback=processResponse) {
-    let postData = {
-        commit: commit,
-        transactions: $(elementIds).each(collectTransactions).concat()
-    };
+function submitTransactions(endpointUrl, elementIds, commit=true, responseCallback=processResponse) {
+    let transactionLists = elementIds.map(collectTransactions);
+    let transactions = [].concat.apply([], transactionLists);
+    let postData = { commit: commit, transactions: transactions };
     $.ajax({
-        url: endpoint_url, method: "post", dataType: "json",
+        url: endpointUrl, method: "post", dataType: "json",
         data: JSON.stringify(postData)
     }).done(function ({pipeline_responses}) {
         $.each(pipeline_responses,responseCallback);

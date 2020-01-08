@@ -1,3 +1,5 @@
+from os.path import dirname, abspath, join
+
 SECRET_KEY = 'fake-key'
 
 DEBUG = True
@@ -6,6 +8,7 @@ INSTALLED_APPS = [
     'django.contrib.auth',
     'django.contrib.sessions',
     'django.contrib.contenttypes',
+    'django.contrib.staticfiles',
     'double_entry', 'tests',
 ]
 
@@ -23,6 +26,8 @@ TEMPLATES = [{
     'OPTIONS': {
         'context_processors': (
             'django.contrib.auth.context_processors.auth',
+            'django.template.context_processors.i18n',
+            'django.template.context_processors.static',
             'django.template.context_processors.request',
         ),
         'loaders': (
@@ -51,3 +56,8 @@ USE_TZ = True
 DEFAULT_CURRENCY = 'EUR'
 
 STATIC_URL = '/static/'
+
+BASE_DIR = dirname(dirname(abspath(__file__)))
+STATICFILES_DIRS = (
+    join(BASE_DIR, 'double_entry', 'static', 'double_entry'),
+)

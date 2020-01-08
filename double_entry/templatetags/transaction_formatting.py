@@ -25,7 +25,10 @@ def rt_html_tags(resolved_transaction: ResolvedTransaction):
     attr_dict = dataclasses.asdict(resolved_transaction)
 
     for attr in resolved_transaction.html_ignore():
-        del attr_dict[attr]
+        try:
+            del attr_dict[attr]
+        except KeyError:
+            pass
 
     # TODO: make this hookable in some way? Might do this if the need arises,
     #  but seems like overkill for now.

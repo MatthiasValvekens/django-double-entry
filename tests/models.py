@@ -22,6 +22,9 @@ class SimpleCustomer(base.TransactionPartyMixin):
     payment_tracking_prefix = 1
     name = models.CharField(max_length=100)
 
+    def __str__(self):
+        return '%s (id %d)' % (self.name, self.pk)
+
 class SimpleCustomerDebt(base.BaseDebtRecord, base.ConcreteAmountMixin):
     # give different names for more meaningful testing
     debtor = models.ForeignKey(
@@ -140,6 +143,9 @@ class TicketCustomer(base.TransactionPartyMixin):
     name = models.CharField(max_length=100)
 
     objects = TicketCustomerQuerySet.as_manager()
+
+    def __str__(self):
+        return '%s (id %d)' % (self.name, self.pk)
 
 
 class ReservationDebtQuerySet(base.BaseDebtQuerySet):

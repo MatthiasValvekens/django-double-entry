@@ -8,6 +8,7 @@ from typing import List, Optional, Set
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.urls import reverse
 from djmoney.money import Money
 
 from double_entry.forms.bulk_utils import (
@@ -189,3 +190,12 @@ class TestCSVForms(TestCase):
         results = form.resolved[0]
         self.assertEqual(results[0], (cust, exp_result))
         self.assertEqual(results[1], (cust, exp_result))
+
+    def test_upload_view(self):
+        csv_file = StringIO(KBC_SIMPLE_LOOKUP_TEST)
+        csv_file.name = 'transfers.csv'
+        response = self.client.post(
+            reverse('kbc_upload'), data={ 'csv': csv_file }
+        )
+        self.assertContains(response, 'Asp￿én', count=2)
+        print(response.content.decode('utf-8'))
