@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 
 from django.test import TestCase
 from djmoney.money import Money
@@ -219,6 +220,27 @@ class TestSimplePreparator(TestCase):
             creditor_id=1
         ).count()
         self.assertEqual(pmt_count, 2)
+
+    def test_negative_amount(self):
+        # includes an irrelevant field
+        error_context = ResolvedTransactionMessageContext()
+        data = deepcopy(SIMPLE_LOOKUP_TEST_RESULT_DATA)
+        data['amount'].amount *= -1
+        resolved_transaction = models.ResolvedTransaction(
+            **data, message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.review()
+        self.assertEqual(len(error_context.transaction_warnings), 0)
+        self.assertEqual(len(error_context.transaction_errors), 1)
+        self.assertTrue('negative' in error_context.transaction_errors[0])
+        self.assertEqual(len(prep.valid_transactions), 0)
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.DISCARD
+        )
 
 
 # noinspection DuplicatedCode

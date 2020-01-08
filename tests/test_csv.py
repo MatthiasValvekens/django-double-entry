@@ -198,4 +198,3 @@ class TestCSVForms(TestCase):
             reverse('kbc_upload'), data={ 'csv': csv_file }
         )
         self.assertContains(response, 'Aspén', count=2)
-        print(response.content.decode('utf-8'))

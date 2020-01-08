@@ -481,7 +481,7 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
             -> Optional[dict]:
         # validate and build model kwargs for transaction
         if transaction.amount.amount < 0:
-            err: ResolvedTransactionMessageContext = transaction.error_context
+            err: ResolvedTransactionMessageContext = transaction.message_context
             err.error(
                 _('Payment amount %(amount)s is negative.'), {
                     'amount': transaction.amount
@@ -512,8 +512,10 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
             for acct, t in resolved:
                 kwargs = self.model_kwargs_for_transaction(acct, t)
                 if kwargs is None:
-                    t.discard()
+                    t.discard()  # make sure this happens
                     continue
+                # if this generates a TypeError, that's on the programmer
+                #  so it should percolate up the stack to a server error
                 entry: LE = self.model(**kwargs)
                 entry.spoof_matched_balance(Decimal('0.00'))
                 yield PreparedTransaction(t, entry)
@@ -568,6 +570,8 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
             timezone.localdate(t.transaction.timestamp)
             for t in valid_transactions
         ]
+        if not dates:
+            return []
 
         historical_buckets = self.model._default_manager.dupcheck_buckets(
             date_bounds=(min(dates), max(dates))
