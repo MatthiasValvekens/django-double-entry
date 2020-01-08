@@ -50,18 +50,38 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
         rt_class = resolver.resolved_transaction_class
         if 'do_not_skip' not in raw:
             raw['do_not_skip'] = False
-        timestamp_fields = {
-            f.name for f in dataclasses.fields(rt_class)
-            if f.type is datetime
-        }
-        for ts_field in timestamp_fields:
-            ts = datetime.fromisoformat(raw[ts_field])
-            if ts.tzinfo is None:
-                # naive datetime - treat as UTC
-                raw[ts_field] = pytz.utc.localize(ts)
-            else:
-                # replace timezone by UTC
-                raw[ts_field] = ts.astimezone(pytz.utc)
+
+        # attempt to reprocess fields in dict
+        # we allow coercions of string values, for easier interoperability
+        #  with html
+        for f in dataclasses.fields(rt_class):
+            try:
+                raw_field = raw[f.name]
+            except KeyError:
+                # will be dealt with later, if necessary
+                continue
+            if f.name == 'amount':  # we already dealt with this
+                continue
+            if f.type is datetime:
+                ts = datetime.fromisoformat(raw_field)
+                if ts.tzinfo is None:
+                    # naive datetime - treat as UTC
+                    raw[f.name] = pytz.utc.localize(ts)
+                else:
+                    # replace timezone by UTC
+                    raw[f.name] = ts.astimezone(pytz.utc)
+            elif f.type is bool:
+                if isinstance(raw_field, str):
+                    if raw_field.casefold() == 'true':
+                        raw[f.name] = True
+                    elif raw_field.casefold() == 'false':
+                        raw[f.name] = False
+                    else:
+                        raise ValueError
+                else:
+                    raise ValueError
+            elif f.type is not str:
+                raw[f.name] = f.type(raw_field)
         return pipeline_section_id, rt_class(
             **raw,
             message_context=APIErrorContext(transaction_id=transaction_id)
@@ -85,9 +105,7 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
         return res
 
     def post(self, request, *, transactions: list, commit: bool=True):
-        by_section = [
-            [] for _i in range(len(self.pipeline_spec))
-        ]
+        by_section = [[] for _i in range(len(self.pipeline_spec))]
         transaction_list = []
         def shape_all():
             for ix, tr in enumerate(transactions):
