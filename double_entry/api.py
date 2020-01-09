@@ -184,6 +184,19 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             res['committed'] = transaction.to_commit
         return res
 
+    # allow subclasses to add more information if necessary
+    # noinspection PyUnusedLocal
+    def format_total_response(self, *, pipeline, transaction_list,
+                              faulty_transaction_responses):
+        def pipeline_responses():
+            # transaction_list now carries all the error data from
+            #  the pipeline, if applicable
+            for tr in transaction_list:
+                res = self.format_transaction_response(tr, include_commit=True)
+                yield res
+            yield from faulty_transaction_responses
+        return { 'pipeline_responses': list(pipeline_responses()) }
+
     def faulty_transaction(self, transaction_id, error, include_commit):
         res = {
             'transaction_id': transaction_id,
@@ -238,19 +251,11 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             pipeline.commit()
         else:
             pipeline.review()
-
-        def pipeline_responses():
-            # transaction_list now carries all the error data from
-            #  the pipeline, if applicable
-            for tr in transaction_list:
-                res = self.format_transaction_response(tr, include_commit=True)
-                yield res
-            yield from faulty_transactions
-
-        return JsonResponse(
-            { 'pipeline_responses': list(pipeline_responses()) },
-            status=201 if commit else 200,
+        response = self.format_total_response(
+            pipeline=pipeline, faulty_transaction_responses=faulty_transactions,
+            transaction_list=transaction_list
         )
+        return JsonResponse(response, status=201 if commit else 200)
 
 def register_pipeline_endpoint(api: api_utils.API,
                                pipeline_spec: bulk_utils.PipelineSpec) -> Type['PaymentPipelineAPIEndpoint']:
