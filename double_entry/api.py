@@ -265,14 +265,13 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
 def register_pipeline_endpoint(api: api_utils.API,
                                pipeline_spec: bulk_utils.PipelineSpec) -> Type['PaymentPipelineAPIEndpoint']:
     # TODO use ledger preparator QS in API?
-    submission_pipeline_spec = [
-        (resolver_class.resolved_transaction_class, prep_class)
-        for resolver_class, prep_class in pipeline_spec
-    ]
     endpoint_class = type(
         'PipelineEndpointFor' + api.__class__.__name__,
         (PaymentPipelineAPIEndpoint,),
-        { 'api': api, 'pipeline_spec': submission_pipeline_spec }
+        {
+            'api': api,
+            'pipeline_spec': bulk_utils.as_submission_spec(pipeline_spec)
+        }
     )
     assert issubclass(endpoint_class, PaymentPipelineAPIEndpoint)
     return endpoint_class

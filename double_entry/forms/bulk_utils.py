@@ -1107,6 +1107,12 @@ PipelineSpec = List[PipelineSectionClass]
 class PaymentPipelineError(ValueError):
     pass
 
+def as_submission_spec(pipeline_spec: PipelineSpec) -> SubmissionSpec:
+    return [
+        (resolver_class.resolved_transaction_class, prep_class)
+        for resolver_class, prep_class in pipeline_spec
+    ]
+
 class PaymentSubmissionPipeline:
     def __init__(self, pipeline_spec: SubmissionSpec, **kwargs):
         super().__init__(**kwargs)
