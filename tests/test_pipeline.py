@@ -23,11 +23,19 @@ PIPELINE_SIMPLE_SECTION = 0
 PIPELINE_TICKET_SECTION = 1
 
 
+# TODO: figure out a way to create skippable tests for the postgres only stuff
 # TODO: test these with queryset sealing
 # noinspection DuplicatedCode
 class TestSimplePreparator(TestCase):
 
     fixtures = ['simple.json']
+
+    def test_refund_nocredit(self):
+        pmt = models.SimpleCustomerPayment(
+            creditor_id=1, total_amount=Money(8, 'EUR')
+        )
+        pmt.spoof_matched_balance(Money(8, 'EUR'))
+        self.assertIsNone(bulk_utils.refund_overpayment([pmt]))
 
     def test_review_simple_resolved_transaction(self):
         error_context = ResolvedTransactionMessageContext()
@@ -51,10 +59,33 @@ class TestSimplePreparator(TestCase):
             error_context.verdict, ResolvedTransactionVerdict.COMMIT
         )
 
+    def test_review_simple_resolved_transaction_exactonly(self):
+        error_context = ResolvedTransactionMessageContext()
+        resolved_transaction = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
+            message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.exact_amount_match_only = True
+        prep.review()
+        self.assertEqual(len(error_context.transaction_warnings), 0)
+        self.assertEqual(len(error_context.transaction_errors), 0)
+        self.assertEqual(len(prep.valid_transactions), 1)
+        pt, = prep.valid_transactions
+        le: models.SimpleCustomerPayment = pt.ledger_entry
+        self.assertEqual(le.total_amount, resolved_transaction.amount)
+        self.assertEqual(le.credit_remaining, Money(0, 'EUR'))
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.COMMIT
+        )
+
     def test_review_simple_resolved_transaction_underpay(self):
         error_context = ResolvedTransactionMessageContext()
         data = deepcopy(SIMPLE_LOOKUP_TEST_RESULT_DATA)
-        data['amount'].amount /= 4
+        data['amount'] = Money(8, 'EUR')
         resolved_transaction = ResolvedTransaction(
             **data, message_context=error_context, do_not_skip=False
         )
@@ -74,10 +105,34 @@ class TestSimplePreparator(TestCase):
             error_context.verdict, ResolvedTransactionVerdict.COMMIT
         )
 
+    def test_review_simple_resolved_transaction_underpay_exactonly(self):
+        error_context = ResolvedTransactionMessageContext()
+        data = deepcopy(SIMPLE_LOOKUP_TEST_RESULT_DATA)
+        data['amount'] = Money(8, 'EUR')
+        resolved_transaction = ResolvedTransaction(
+            **data, message_context=error_context, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleTransferPreparator(
+            resolved_transactions=[(cust, resolved_transaction)]
+        )
+        prep.exact_amount_match_only = True
+        prep.review()
+        self.assertEqual(len(error_context.transaction_warnings), 1)
+        self.assertTrue('only 0.00' in error_context.transaction_warnings[0])
+        self.assertEqual(len(prep.valid_transactions), 1)
+        pt, = prep.valid_transactions
+        le: models.SimpleCustomerPayment = pt.ledger_entry
+        self.assertEqual(le.total_amount, resolved_transaction.amount)
+        self.assertEqual(le.credit_remaining, Money(8, 'EUR'))
+        self.assertEqual(
+            error_context.verdict, ResolvedTransactionVerdict.COMMIT
+        )
+
     def test_commit_simple_resolved_transaction_underpay(self):
         error_context = ResolvedTransactionMessageContext()
         data = deepcopy(SIMPLE_LOOKUP_TEST_RESULT_DATA)
-        data['amount'].amount /= 4
+        data['amount'] = Money(8, 'EUR')
         resolved_transaction = ResolvedTransaction(
             **data, message_context=error_context, do_not_skip=False
         )

@@ -806,7 +806,7 @@ def refund_overpayment(
 
     payments = list(payments)
     if not payments:
-        return
+        return  # pragma: no cover
     p = payments[0]
     payment_model = p.__class__
     split_model, payment_fk_name = payment_model.get_split_model()
@@ -846,6 +846,9 @@ def refund_overpayment(
 
 PLE = TypeVar('PLE', bound=models.BasePaymentRecord)
 class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
+
+    prioritise_exact_amount_match = True
+    exact_amount_match_only = False
 
     @property
     def overpayment_fmt_string(self):
@@ -897,7 +900,9 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
         return make_payment_splits(
             payments, debts, self.split_model,
             payment_fk_name=self.payment_fk_name,
-            debt_fk_name=self.debt_fk_name
+            debt_fk_name=self.debt_fk_name,
+            prioritise_exact_amount_match=self.prioritise_exact_amount_match,
+            exact_amount_match_only=self.exact_amount_match_only
         )
 
     def simulate_apportionments(self, debt_key, debts, transactions) \
@@ -1047,7 +1052,7 @@ class PaymentPipelineSection(Generic[LE,TP,TI,RT]):
 
     def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
         if self.error_context is None:
-            raise PaymentPipelineError(
+            raise PaymentPipelineError(  # pragma: no cover
                 'Cannot use pipeline for resolving without error context.'
             )
         resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
@@ -1086,7 +1091,7 @@ class PaymentPipeline:
     def __init__(self, pipeline_spec: PipelineSpec,
                  parser=None, resolved: Optional[List[List[ResolvedTransaction]]]=None):
         if parser is None and resolved is None:
-            raise PaymentPipelineError(
+            raise PaymentPipelineError(  # pragma: no cover
                 'One of \'parser\' and \'resolved\' must be non-null'
             )
 
