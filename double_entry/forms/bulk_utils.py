@@ -107,7 +107,6 @@ class ResolvedTransactionMessageContext:
             ResolvedTransactionVerdict.COMMIT
         self.transaction_errors = []
         self.transaction_warnings = []
-        self.transaction_success = []
 
     def discard(self):
         self._verdict = ResolvedTransactionVerdict.DISCARD
@@ -125,9 +124,6 @@ class ResolvedTransactionMessageContext:
 
     def warning(self, msg: str, params: Optional[dict]=None):
         self.transaction_warnings.append(msg if params is None else msg % params)
-
-    def success(self, msg: str, params: Optional[dict]=None):
-        self.transaction_success.append(msg if params is None else msg % params)
 
     @staticmethod
     def mass_suggest_skip(contexts):
