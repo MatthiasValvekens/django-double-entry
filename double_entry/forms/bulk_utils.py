@@ -52,9 +52,8 @@ from django import forms
 from django.conf import settings
 from django.db.models import ForeignKey
 from django.utils import timezone
-from django.utils.functional import cached_property
 from django.utils.translation import (
-    ugettext_lazy as _, ugettext,
+    ugettext_lazy as _,
 )
 from djmoney.money import Money
 
@@ -180,23 +179,21 @@ class TransactionWithMessages:
 
 def broadcast_error(transactions: List[TransactionWithMessages],
                         msg: str, params: Optional[dict]):
-    if not transactions:
-        raise ValueError('no transactions to which error applies')
-    errs = list(tr.message_context for tr in transactions)
-    err_cls = errs[0].__class__
-    if any(err.__class__ != err_cls for err in errs):
-        raise ValueError('Cannot combine message contexts of different types')
-    err_cls.broadcast_error(errs, msg, params)
+    _broadcast('error', transactions, msg, params)
 
 def broadcast_warning(transactions: List[TransactionWithMessages],
                     msg: str, params: Optional[dict]):
-    if not transactions:
-        raise ValueError('no transactions to which warning applies')
+    _broadcast('warning', transactions, msg, params)
+
+def _broadcast(what, transactions: List[TransactionWithMessages],
+                      msg: str, params: Optional[dict]):
+    if not transactions:  # pragma: no cover
+        return
     errs = list(tr.message_context for tr in transactions)
     err_cls = errs[0].__class__
-    if any(err.__class__ != err_cls for err in errs):
+    if any(err.__class__ != err_cls for err in errs):  # pragma: no cover
         raise ValueError('Cannot combine message contexts of different types')
-    err_cls.broadcast_warning(errs, msg, params)
+    getattr(err_cls, 'broadcast_' + what)(errs, msg, params)
 
 
 @dataclass(frozen=True)
@@ -251,11 +248,16 @@ class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
         self.tinfo = tinfo
 
     @classmethod
-    def broadcast_error(cls, contexts: List['RTErrorContextFromMixin'],
-                        msg: str, params: Optional[dict]=None):
+    def _broadcast_message(cls, contexts: List['RTErrorContextFromMixin'],
+                           msg: str, params: Optional[dict] = None):
         line_nos = [c.tinfo.line_no for c in contexts]
         ctxt = contexts[0]
         ctxt.error_mixin.error_at_lines(line_nos, msg, params)
+
+    @classmethod
+    def broadcast_error(cls, contexts: List['RTErrorContextFromMixin'],
+                        msg: str, params: Optional[dict]=None):
+        cls._broadcast_message(contexts, msg, params)
         for ctxt in contexts:
             ctxt.discard()
             ctxt.transaction_errors.append(
@@ -270,9 +272,7 @@ class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
     @classmethod
     def broadcast_warning(cls, contexts: List['RTErrorContextFromMixin'],
                         msg: str, params: Optional[dict]):
-        line_nos = [c.tinfo.line_no for c in contexts]
-        ctxt = contexts[0]
-        ctxt.error_mixin.error_at_lines(line_nos, msg, params)
+        cls._broadcast_message(contexts, msg, params)
         for ctxt in contexts:
             ctxt.transaction_warnings.append(
                 msg if params is None else msg % params
@@ -309,7 +309,7 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
 
     def __init_subclass__(cls, *args, abstract=False, **kwargs):
         abstract |= inspect.isabstract(cls)
-        if cls.transaction_party_model is None and not abstract:
+        if cls.transaction_party_model is None and not abstract:  # pragma: no cover
             raise TypeError('Ledger resolver must set transaction_party_model')
         super().__init_subclass__(*args, **kwargs)
 
@@ -424,12 +424,12 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
     # defined, and can be overridden to perform initialisation logic if necessary
     @classmethod
     def _ensure_transaction_party_model_set(cls):
-        if cls.transaction_party_model is None:
+        if cls.transaction_party_model is None:  # pragma: no cover
             raise TypeError('transaction_party_model must be set')
 
     @classmethod
     def _ensure_model_set(cls):
-        if cls.model is None:
+        if cls.model is None:  # pragma: no cover
             raise TypeError('model must be set')
 
     @classmethod
@@ -447,7 +447,7 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
                 account_field, = (
                     f for f in model._meta.get_fields() if is_candidate(f)
                 )
-            except ValueError:
+            except ValueError:  # pramga: no cover
                 raise TypeError(
                     'Could not establish a link between transaction party model '
                     'and ledger entry model. Please set the `account_field` '
@@ -639,7 +639,7 @@ class ApportionmentResult:
 
     def __iadd__(self, other):
         if not isinstance(other, ApportionmentResult):
-            raise TypeError
+            raise TypeError  # pragma: no cover
         self.fully_used_payments += other.fully_used_payments
         self.fully_paid_debts += other.fully_paid_debts
         self.remaining_debts += other.remaining_debts
@@ -733,14 +733,11 @@ def make_payment_splits(payments: Sequence[accounting_base.BasePaymentRecord],
             # look for some unpaid debt
             while not debt_remaining or debt.is_refund:
                 if debt is not None:  # initial step guard
-                    if not debt_remaining:
-                        # report debt as fully paid
-                        results.fully_paid_debts.append(debt)
-                        debt.spoof_matched_balance(debt.total_amount)
-                    else:
-                        # this shouldn't happen, but let's
-                        # cover our collective asses
-                        results.remaining_debts.append(debt)
+                    # either the debt is a refund, or it is fully paid off
+                    # since being partially paid off doesn't make sense
+                    # for a refund, we can safely report the debt as fully paid
+                    results.fully_paid_debts.append(debt)
+                    debt.spoof_matched_balance(debt.total_amount)
                 debt = next(debts_iter)
                 debt_remaining = debt.balance
         except StopIteration:
@@ -895,19 +892,6 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
     @property
     def require_autogenerated_refunds(self):
         return self.refund_credit_gnucash_account is not None
-
-    @cached_property
-    def refund_message(self):
-        if self.require_autogenerated_refunds:
-            return ugettext(
-                'Refunds will be automatically created to compensate '
-                'for the difference in funds. '
-                'Please process these at your earliest convenience.'
-            )
-        else:
-            return ugettext(
-                'Please resolve this issue manually.'
-            )
 
     def _split_gen(self, debts, payments):
         return make_payment_splits(
