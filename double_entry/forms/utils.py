@@ -3,11 +3,9 @@ import io
 from typing import Optional, List, Tuple
 
 from django import forms
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.forms.models import ModelForm
 from django.utils.deconstruct import deconstructible
-from django.utils.functional import cached_property
 from django.utils.translation import ugettext_lazy as _
 
 from .. import models
@@ -56,9 +54,8 @@ ErrorList = List[Tuple[List[int],str]]
 
 class ErrorMixin(abc.ABC):
 
-    @abc.abstractmethod
     def error_at_line(self, line_no: int, msg: str, params: Optional[dict]=None):
-        pass
+        self.error_at_lines([line_no], msg, params)
 
     @abc.abstractmethod
     def error_at_lines(self, line_nos: List[int], msg: str,

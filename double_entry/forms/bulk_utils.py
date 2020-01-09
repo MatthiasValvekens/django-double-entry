@@ -217,10 +217,6 @@ class TransactionPartyIndexBuilder(Generic[TP]):
     def lookup(self, account_lookup_str: str) -> Optional[TP]:
         raise NotImplementedError
 
-    @classmethod
-    def lookup_key_for_account(cls, account):
-        raise NotImplementedError
-
     def append(self, tinfo):
         raise NotImplementedError
 
