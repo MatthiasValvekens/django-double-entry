@@ -10,8 +10,8 @@ from double_entry.api import register_pipeline_endpoint
 from webauth import api_utils
 
 test_transfer_pipeline = [
-    (SimpleTransferResolver, SimpleTransferPreparator),
-    (ReservationTransferResolver, ReservationTransferPreparator)
+    (SimpleTransferResolver, SimpleGenericPreparator),
+    (ReservationTransferResolver, ReservationPreparator)
 ]
 
 test_pipeline_api = api_utils.API(

@@ -557,8 +557,20 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
 
 
 class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
-    single_dup_message = None
-    multiple_dup_message = None
+    multiple_dup_message = _(
+        'A payment by %(account)s '
+        'for amount %(amount)s on date %(date)s appears %(hist)d time(s) '
+        'in history, and %(import)d time(s) in '
+        'the current batch of data. '
+        'Resolution: %(dupcount)d ruled as duplicate(s).'
+    )
+
+    single_dup_message = _(
+        'A payment by %(account)s '
+        'for amount %(amount)s on date %(date)s already appears '
+        'in the payment history. '
+        'Resolution: likely duplicate, skipped processing.'
+    )
 
     def validate_global(self, valid_transactions: PreparedTransactionList):
         valid_transactions = list(super().validate_global(valid_transactions))
@@ -617,11 +629,13 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
                 
 
     def dup_error_params(self, signature_used):
+        account_id = getattr(signature_used, self.account_field + '_id')
         return {
             'date': signature_used.date,
             'amount': Money(
                 signature_used.amount, settings.DEFAULT_CURRENCY
             ),
+            'account': str(self.get_account(account_id))
         }
 
 

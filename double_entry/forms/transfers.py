@@ -89,33 +89,3 @@ class TransferResolver(bulk_utils.LedgerResolver[TP, TI, RT], abstract=True):
         return [
             TransferTransactionIndexBuilder(self, prefix_digit=prefix_digit)
         ]
-
-
-class TransferPaymentPreparator(bulk_utils.StandardCreditApportionmentMixin[LE, TP, RT],
-                                bulk_utils.DuplicationProtectedPreparator[LE, TP, RT]):
-
-    multiple_dup_message = _(
-        'A bank transfer payment by %(account)s '
-        'for amount %(amount)s on date %(date)s appears %(hist)d time(s) '
-        'in history, and %(import)d time(s) in '
-        'the current batch of data. '
-        'Resolution: %(dupcount)d ruled as duplicate(s).'
-    )
-
-    single_dup_message = _(
-        'A bank transfer payment by %(account)s '
-        'for amount %(amount)s on date %(date)s already appears '
-        'in the payment history. '
-        'Resolution: likely duplicate, skipped processing.'
-    )
-
-    # unreadable payment references should be skipped silently
-    unparseable_account_message = None
-
-    def dup_error_params(self, signature_used):
-        params = super().dup_error_params(signature_used)
-        # TODO: this is sane enough as a default, but we should perhaps
-        #  not impose it.
-        account_id = getattr(signature_used, self.account_field + '_id')
-        params['account'] = str(self.get_account(account_id))
-        return params

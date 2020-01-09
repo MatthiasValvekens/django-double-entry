@@ -44,7 +44,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -66,7 +66,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.exact_amount_match_only = True
@@ -90,7 +90,7 @@ class TestSimplePreparator(TestCase):
             **data, message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -113,7 +113,7 @@ class TestSimplePreparator(TestCase):
             **data, message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.exact_amount_match_only = True
@@ -137,7 +137,7 @@ class TestSimplePreparator(TestCase):
             **data, message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -156,7 +156,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -171,7 +171,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -191,7 +191,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -213,7 +213,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         refund_cat = GnuCashCategory.get_category('refund')
@@ -237,7 +237,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -247,7 +247,7 @@ class TestSimplePreparator(TestCase):
 
         # reload to make sure
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -262,7 +262,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -272,7 +272,7 @@ class TestSimplePreparator(TestCase):
 
         # reload to make sure
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -292,7 +292,7 @@ class TestSimplePreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -306,7 +306,7 @@ class TestSimplePreparator(TestCase):
             **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=True,
         )
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -328,7 +328,7 @@ class TestSimplePreparator(TestCase):
             **data, message_context=error_context, do_not_skip=False
         )
         cust = models.SimpleCustomer.objects.get(pk=1)
-        prep = models.SimpleTransferPreparator(
+        prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -353,7 +353,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -375,7 +375,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -390,7 +390,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -410,7 +410,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -432,7 +432,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         refund_cat = GnuCashCategory.get_category('refund')
@@ -456,7 +456,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -466,7 +466,7 @@ class TestReservationPreparator(TestCase):
 
         # reload to make sure
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.review()
@@ -481,7 +481,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -491,7 +491,7 @@ class TestReservationPreparator(TestCase):
 
         # reload to make sure
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -511,7 +511,7 @@ class TestReservationPreparator(TestCase):
             message_context=error_context, do_not_skip=False
         )
         cust = models.TicketCustomer.objects.get(pk=1)
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()
@@ -525,7 +525,7 @@ class TestReservationPreparator(TestCase):
             **SIMPLE_LOOKUP_TEST_RESULT_DATA,
             message_context=error_context, do_not_skip=True,
         )
-        prep = models.ReservationTransferPreparator(
+        prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
         prep.commit()

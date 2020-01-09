@@ -1,3 +1,4 @@
+from collections import defaultdict
 from decimal import Decimal
 
 from django.conf import settings
@@ -10,11 +11,15 @@ from djmoney.models.fields import MoneyField
 from djmoney.money import Money
 
 from double_entry import models as base
-from double_entry.forms.bulk_utils import ResolvedTransaction
-from double_entry.forms.csv import BankTransactionInfo
-from double_entry.forms.transfers import (
-    TransferResolver, TransferPaymentPreparator,
+from double_entry.forms.bulk_utils import (
+    ResolvedTransaction,
+    TransactionPartyIndexBuilder,
+    LedgerResolver,
+    DuplicationProtectedPreparator,
+    StandardCreditApportionmentMixin,
 )
+from double_entry.forms.csv import BankTransactionInfo
+from double_entry.forms.transfers import TransferResolver
 from double_entry.utils import decimal_to_money
 
 
@@ -60,6 +65,40 @@ class SimpleCustomerPaymentSplit(base.BaseDebtPaymentSplit):
         related_name='debt_splits'
     )
 
+# noinspection DuplicatedCode
+class ByNameIndexBuilder(TransactionPartyIndexBuilder):
+    def __init__(self, resolver):
+        self.account_index = {}
+        self.line_index = defaultdict(list)
+        super().__init__(resolver)
+
+    def lookup(self, account_lookup_str: str):
+        return self.account_index.get(account_lookup_str.casefold())
+
+    @classmethod
+    def lookup_key_for_account(cls, account):
+        return account.full_name
+
+    def append(self, tinfo):
+        # this method isn't picky
+        string = tinfo.account_lookup_str
+        self.line_index[string.casefold()].append(tinfo.line_no)
+        return True
+
+    def execute_query(self):
+        name_qs, unseen, duplicates = self.base_query_set().by_full_names(
+            self.line_index.keys(),
+            validate_unseen=True, validate_nodups=True
+        )
+
+        for name in unseen:
+            self.resolver.unknown_account(name, self.line_index[name])
+
+        for name in duplicates:
+            self.resolver.ambiguous_account(name, self.line_index[name])
+
+        for m in name_qs:
+            self.account_index[m.full_name.casefold()] = m
 
 # TODO: add factory methods to double_entry to build these guys
 
@@ -68,11 +107,15 @@ class SimpleTransferResolver(TransferResolver[SimpleCustomer,
                                               ResolvedTransaction]):
     transaction_party_model = SimpleCustomer
 
-class SimpleTransferPreparator(TransferPaymentPreparator[
-                                        SimpleCustomerPayment,
-                                        SimpleCustomer,
-                                        ResolvedTransaction
-                                    ]):
+class SimpleGenericResolver(LedgerResolver):
+
+    transaction_party_model = SimpleCustomer
+
+    def get_index_builders(self):
+        return [ ByNameIndexBuilder(self) ]
+
+class SimpleGenericPreparator(DuplicationProtectedPreparator,
+                              StandardCreditApportionmentMixin):
     transaction_party_model = SimpleCustomer
 
 class Event(models.Model):
@@ -283,8 +326,5 @@ class ReservationTransferResolver(TransferResolver[TicketCustomer,
                                               ResolvedTransaction]):
     transaction_party_model = TicketCustomer
 
-class ReservationTransferPreparator(TransferPaymentPreparator[
-                                   ReservationPayment,
-                                   TicketCustomer,
-                                   ResolvedTransaction]):
+class ReservationPreparator(DuplicationProtectedPreparator, StandardCreditApportionmentMixin):
     transaction_party_model = TicketCustomer
