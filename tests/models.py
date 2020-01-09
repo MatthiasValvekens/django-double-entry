@@ -1,10 +1,13 @@
+import operator
 from collections import defaultdict
 from decimal import Decimal
+from functools import reduce
 
 from django.conf import settings
 from django.db import models
 from django.db.models import (
-    OuterRef, Sum, ExpressionWrapper, F, Subquery, Value
+    OuterRef, Sum, ExpressionWrapper, F, Subquery, Value,
+    Q,
 )
 from django.db.models.functions import Coalesce
 from djmoney.models.fields import MoneyField
@@ -20,12 +23,24 @@ from double_entry.forms.bulk_utils import (
 )
 from double_entry.forms.csv import BankTransactionInfo
 from double_entry.forms.transfers import TransferResolver
-from double_entry.utils import decimal_to_money
+from double_entry.utils import decimal_to_money, validated_bulk_query
 
+
+class SimpleCustomerQuerySet(base.TransactionPartyQuerySet):
+
+    @validated_bulk_query(lambda x: x.name, ignorecase=True)
+    def by_full_names(self, names):
+        if not names:
+            return self.none()
+
+        conds = map(lambda name: Q(name__iexact=name), names)
+        return self.filter(reduce(operator.or_, conds))
 
 class SimpleCustomer(base.TransactionPartyMixin):
     payment_tracking_prefix = 1
     name = models.CharField(max_length=100)
+
+    objects = SimpleCustomerQuerySet.as_manager()
 
     def __str__(self):
         return '%s (id %d)' % (self.name, self.pk)
@@ -70,19 +85,19 @@ class ByNameIndexBuilder(TransactionPartyIndexBuilder):
     def __init__(self, resolver):
         self.account_index = {}
         self.line_index = defaultdict(list)
+        self.original_name_index = {}
         super().__init__(resolver)
 
     def lookup(self, account_lookup_str: str):
         return self.account_index.get(account_lookup_str.casefold())
 
-    @classmethod
-    def lookup_key_for_account(cls, account):
-        return account.full_name
-
     def append(self, tinfo):
         # this method isn't picky
         string = tinfo.account_lookup_str
-        self.line_index[string.casefold()].append(tinfo.line_no)
+        casefold = string.casefold()
+        self.line_index[casefold].append(tinfo.line_no)
+        # don't care if this results in an overwrite
+        self.original_name_index[casefold] = string
         return True
 
     def execute_query(self):
@@ -92,13 +107,18 @@ class ByNameIndexBuilder(TransactionPartyIndexBuilder):
         )
 
         for name in unseen:
-            self.resolver.unknown_account(name, self.line_index[name])
+            self.resolver.unknown_account(
+                self.original_name_index[name], self.line_index[name]
+            )
 
         for name in duplicates:
-            self.resolver.ambiguous_account(name, self.line_index[name])
+            self.resolver.ambiguous_account(
+                self.original_name_index[name], self.line_index[name]
+            )
 
         for m in name_qs:
-            self.account_index[m.full_name.casefold()] = m
+            if m.name.casefold() not in duplicates:
+                self.account_index[m.name.casefold()] = m
 
 # TODO: add factory methods to double_entry to build these guys
 

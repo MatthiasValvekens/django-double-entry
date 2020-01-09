@@ -16,7 +16,7 @@ from double_entry.forms.bulk_utils import (
     ResolvedTransactionMessageContext,
     FinancialCSVUploadForm,
 )
-from double_entry.forms.csv import BankTransactionInfo
+from double_entry.forms.csv import BankTransactionInfo, TransactionInfo
 from double_entry.forms.utils import ErrorMixin
 from . import models, views
 from double_entry.forms import csv as forms_csv
@@ -60,6 +60,15 @@ SIMPLE_LOOKUP_TEST_POSTPARSE = [
     )
 ]
 
+SIMPLE_NAME_LOOKUP_TEST_POSTPARSE = [
+    TransactionInfo(
+        ln, Money(amt, 'EUR'), PARSE_TEST_DATETIME, lookup_str,
+    ) for ln, amt, lookup_str in (
+        (1, 32, 'Asp\u00e9n Robbins'), (2, 1, 'Benedict Petersen'),
+        (3, 1, 'I Dontexist'), (4, 1, 'ignatius NeLsOn')
+    )
+]
+
 SIMPLE_LOOKUP_TEST_RESULT_DATA = {
     'transaction_party_id': 1, 'amount': Money(32, 'EUR'),
     'timestamp': PARSE_TEST_DATETIME,
@@ -68,22 +77,22 @@ SIMPLE_LOOKUP_TEST_RESULT_DATA = {
 
 class TestErrorMixin(ErrorMixin):
 
-    def __init__(self, test_case: TestCase, expected_error_lines: Set[int]):
+    def __init__(self, test_case: TestCase, expected_error_lines: Set[int],
+                 echo=False):
         self.test_case = test_case
         self.lines_with_errors: Set[int] = set()
         self.expected_errors = expected_error_lines
+        self.echo = echo
 
     def assert_errors(self):
         self.test_case.assertEqual(
             self.lines_with_errors, self.expected_errors
         )
 
-    def error_at_line(self, line_no: int, msg: str,
-                      params: Optional[dict] = None):
-        self.lines_with_errors.add(line_no)
-
     def error_at_lines(self, line_nos: List[int], msg: str,
                        params: Optional[dict]=None):
+        if self.echo:
+            print(line_nos, msg if params is None else (msg % params))
         self.lines_with_errors.update(line_nos)
 
 
@@ -166,6 +175,24 @@ class TestBankCSVs(TestCase):
         )
         self.assertEqual(results[0], (cust, exp_result))
         self.assertEqual(results[1], (cust, exp_result))
+
+class TestNameLookup(TestCase):
+    fixtures = ['simple.json']
+
+    def test_simple_transfer_lookup(self):
+        error_feedback = TestErrorMixin(
+            test_case=self, expected_error_lines={2,3}
+        )
+
+        resolver = models.SimpleGenericResolver(error_feedback)
+        results = list(resolver(SIMPLE_NAME_LOOKUP_TEST_POSTPARSE))
+        error_feedback.assert_errors()
+        self.assertEqual(len(results), 2)
+        ((cust1, rt1), (cust2, rt2)) = results
+        self.assertEqual(cust1.pk, 1)
+        self.assertEqual(cust1.name, 'Asp\u00e9n Robbins')
+        self.assertEqual(cust2.pk, 4)
+        self.assertEqual(cust2.name, 'Ignatius Nelson')
 
 # noinspection DuplicatedCode
 class TestCSVForms(TestCase):

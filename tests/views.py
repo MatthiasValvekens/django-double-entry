@@ -1,4 +1,3 @@
-from io import StringIO
 from collections import OrderedDict
 
 from django.core.files.uploadedfile import SimpleUploadedFile
