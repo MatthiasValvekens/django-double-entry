@@ -2,8 +2,6 @@ import logging
 from collections import defaultdict
 from typing import Dict, TypeVar, Optional
 
-from django.utils.translation import ugettext_lazy as _
-
 import double_entry.utils
 from double_entry import models
 from double_entry.forms.csv import TransactionInfo, BankTransactionInfo

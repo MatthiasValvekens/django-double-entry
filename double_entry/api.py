@@ -23,13 +23,19 @@ class TransactionShapingError(api_utils.APIError):
     pass
 
 class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
-    pipeline_spec: bulk_utils.PipelineSpec = None
+    pipeline_spec: bulk_utils.SubmissionSpec = None
     endpoint_name = 'pipeline_submit'
 
     def __init_subclass__(cls, abstract=False, **kwargs):
         super().__init_subclass__(abstract=abstract)
         if not abstract and cls.pipeline_spec is None:
             raise TypeError
+
+    def get_queryset(self, pipeline_section_id):
+        rt_class, preparator_class = self.pipeline_spec[pipeline_section_id]
+        return bulk_utils.LedgerQuerySetBuilder.default_ledger_query_set(
+            preparator_class.transaction_party_model
+        )
 
     def shape_resolved_transaction(self, transaction_id, raw: dict):
         try:
@@ -59,13 +65,11 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
                     'pipeline_section_id is required on all transactions'
                 )
         try:
-            resolver, preparator = self.pipeline_spec[pipeline_section_id]
+            rt_class, preparator = self.pipeline_spec[pipeline_section_id]
         except IndexError:
             raise TransactionShapingError(
                 'Invalid pipeline section \'%d\'.', pipeline_section_id
             )
-
-        rt_class = resolver.resolved_transaction_class
 
         # attempt to reprocess fields in dict
         # we allow coercions of string values, for easier interoperability
@@ -210,7 +214,6 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
 
     def post(self, request, *, transactions: list, commit: bool=True):
         by_section = [[] for _i in range(len(self.pipeline_spec))]
-        transaction_list = []
         faulty_transactions = []
         def shape_all():
             for tr in transactions:
@@ -244,9 +247,11 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
 
         transaction_list = list(shape_all())
 
-        pipeline = bulk_utils.PaymentPipeline(
-            self.pipeline_spec, resolved=by_section
+        pipeline = bulk_utils.PaymentSubmissionPipeline(self.pipeline_spec)
+        pipeline.submit_resolved(
+            [(self.get_queryset(ix), trs) for ix, trs in enumerate(by_section)]
         )
+
         if commit:
             pipeline.commit()
         else:
@@ -259,10 +264,15 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
 
 def register_pipeline_endpoint(api: api_utils.API,
                                pipeline_spec: bulk_utils.PipelineSpec) -> Type['PaymentPipelineAPIEndpoint']:
+    # TODO use ledger preparator QS in API?
+    submission_pipeline_spec = [
+        (resolver_class.resolved_transaction_class, prep_class)
+        for resolver_class, prep_class in pipeline_spec
+    ]
     endpoint_class = type(
         'PipelineEndpointFor' + api.__class__.__name__,
         (PaymentPipelineAPIEndpoint,),
-        { 'api': api, 'pipeline_spec': pipeline_spec }
+        { 'api': api, 'pipeline_spec': submission_pipeline_spec }
     )
     assert issubclass(endpoint_class, PaymentPipelineAPIEndpoint)
     return endpoint_class

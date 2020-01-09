@@ -50,7 +50,7 @@ from typing import (
 
 from django import forms
 from django.conf import settings
-from django.db.models import ForeignKey
+from django.db.models import ForeignKey, QuerySet
 from django.utils import timezone
 from django.utils.translation import (
     ugettext_lazy as _,
@@ -280,8 +280,21 @@ class RTErrorContextFromMixin(ResolvedTransactionMessageContext):
         super().warning(msg, params)
 
 
-class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
+class LedgerQuerySetBuilder(Generic[TP]):
     transaction_party_model: ClassVar[Type[TP]] = None
+
+    @classmethod
+    def base_query_set(cls):
+        return LedgerQuerySetBuilder.default_ledger_query_set(
+            transaction_party_model=cls.transaction_party_model
+        )
+
+    @staticmethod
+    def default_ledger_query_set(transaction_party_model: Type[TP]):
+        return transaction_party_model \
+            ._default_manager.with_debts_and_payments()
+
+class LedgerResolver(ErrorContextWrapper, LedgerQuerySetBuilder[TP], Generic[TP, TI, RT], abc.ABC):
     transaction_info_class: ClassVar[Type[TI]] = TransactionInfo
     resolved_transaction_class: ClassVar[Type[RT]] = ResolvedTransaction
 
@@ -312,11 +325,6 @@ class LedgerResolver(ErrorContextWrapper, Generic[TP, TI, RT], abc.ABC):
     @abc.abstractmethod
     def get_index_builders(self) -> List[TransactionPartyIndexBuilder[TP]]:
         raise NotImplementedError
-
-    @classmethod
-    def base_query_set(cls):
-        return cls.transaction_party_model \
-            ._default_manager.with_debts_and_payments()
 
     def resolve_account(self, tinfo: TI, transaction_party_id) -> RT:
         tinfo_dict = dataclasses.asdict(tinfo)
@@ -1051,24 +1059,9 @@ class StandardCreditApportionmentMixin(CreditApportionmentMixin[LE, TP, RT]):
         return self._debt_buckets[debt_key]
 
 
-class PaymentPipelineSection(Generic[LE,TP,TI,RT]):
-
-    def __init__(self, resolver_class: Type[LedgerResolver[TP, TI, RT]],
-                    ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]],
-                    error_context: Optional[ErrorMixin]=None):
-        self.resolver_class = resolver_class
+class SubmissionPipelineSection(Generic[LE,TP,RT]):
+    def __init__(self, ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]]):
         self.ledger_preparator_class = ledger_preparator_class
-        self.error_context = error_context
-
-    def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
-        if self.error_context is None:
-            raise PaymentPipelineError(  # pragma: no cover
-                'Cannot use pipeline for resolving without error context.'
-            )
-        resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
-            self.error_context
-        )
-        return resolver(parsed_data)
 
     def review(self, resolved: Iterable[Tuple[TP, RT]]):
         preparator = self.ledger_preparator_class(resolved)
@@ -1084,6 +1077,20 @@ class PaymentPipelineSection(Generic[LE,TP,TI,RT]):
         preparator.commit()
         return preparator
 
+class PaymentPipelineSection(SubmissionPipelineSection, Generic[LE,TP,TI,RT]):
+
+    def __init__(self, resolver_class: Type[LedgerResolver[TP, TI, RT]],
+                    ledger_preparator_class: Type[LedgerEntryPreparator[LE, TP, RT]],
+                    error_context: ErrorMixin):
+        super().__init__(ledger_preparator_class)
+        self.resolver_class = resolver_class
+        self.error_context = error_context
+
+    def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
+        resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
+            self.error_context
+        )
+        return resolver(parsed_data)
 
 ResolvedSection = List[Tuple[TransactionPartyMixin, ResolvedTransaction]]
 PipelineResolved = List[ResolvedSection]
@@ -1091,61 +1098,59 @@ PipelinePrepared = List[List[PreparedTransaction]]
 PipelineSectionClass = Tuple[
     Type[LedgerResolver[TP, TI, RT]], Type[LedgerEntryPreparator[LE, TP, RT]]
 ]
+SubmissionPipelineSectionClass = Tuple[
+    Type[RT], Type[LedgerEntryPreparator[LE, TP, RT]]
+]
+SubmissionSpec = List[SubmissionPipelineSectionClass]
 PipelineSpec = List[PipelineSectionClass]
 
 class PaymentPipelineError(ValueError):
     pass
 
-class PaymentPipeline:
-
-    def __init__(self, pipeline_spec: PipelineSpec,
-                 parser=None, resolved: Optional[List[List[ResolvedTransaction]]]=None):
-        if parser is None and resolved is None:
-            raise PaymentPipelineError(  # pragma: no cover
-                'One of \'parser\' and \'resolved\' must be non-null'
-            )
-
-        self.parser = parser
-        if parser is not None:
-            self._parser_wrapper = ParserErrorAggregator(parser)
-        else:
-            self._parser_wrapper = None
-
+class PaymentSubmissionPipeline:
+    def __init__(self, pipeline_spec: SubmissionSpec, **kwargs):
+        super().__init__(**kwargs)
         self.pipeline_sections = [
-            PaymentPipelineSection(resolver, preparator, self._parser_wrapper)
-            for resolver, preparator in pipeline_spec
+            SubmissionPipelineSection(preparator)
+            for rt_class, preparator in pipeline_spec
         ]
-        self.prepared: Optional[PipelinePrepared] = None
-        if resolved is None:
-            self.resolved: Optional[PipelineResolved] = None
-        else:
-            def resolved_for_pipeline(pls: PaymentPipelineSection, transactions):
-                account_ids = set(r.transaction_party_id for r in transactions)
-                # no need to hit the DB if we know the result set will be empty
-                if not account_ids:
-                    return
-                accounts = pls.resolver_class.base_query_set().filter(
-                    pk__in=account_ids
+        self.rt_classes = [rt_class for rt_class, preparator in pipeline_spec]
+
+    def submit_resolved(self, resolved: List[Tuple[QuerySet, List[ResolvedTransaction]]]):
+        def resolved_for_pipeline(qs, rt_class, transactions):
+            account_ids = set(r.transaction_party_id for r in transactions)
+            # no need to hit the DB if we know the result set will be empty
+            if not account_ids:
+                return
+            wrong = [r for r in transactions if not isinstance(r, rt_class)]
+            if wrong:
+                broadcast_error(
+                    wrong,
+                    'Wrong transaction type, pipeline '
+                    'expects \'%(expected)s\'.',
+                    params={ 'expected': rt_class }
                 )
-                account_ix = {acct.pk: acct for acct in accounts}
-                for rt in transactions:
-                    # TODO: fail with meaningful error if not found
-                    yield account_ix[rt.transaction_party_id], rt
+            accounts = qs.filter(pk__in=account_ids)
+            account_ix = {acct.pk: acct for acct in accounts}
+            rt: ResolvedTransaction
+            for rt in transactions:
+                try:
+                    account = account_ix[rt.transaction_party_id]
+                    yield account, rt
+                except KeyError:
+                    rt.message_context.error(
+                        _('Account with id \'%(pk)d\' not found'),
+                        params={'pk': rt.transaction_party_id}
+                    )
 
-            self.resolved = [
-                list(resolved_for_pipeline(*t))
-                for t in zip(self.pipeline_sections, resolved)
-            ]
-
-    def resolve(self):
-        if self.resolved is not None:
-            return
         self.resolved = [
-            list(p.resolve(self.parser.parsed_data))
-            for p in self.pipeline_sections
+            list(resolved_for_pipeline(qb, rt_class, transactions))
+            for rt_class, (qb, transactions) in zip(self.rt_classes, resolved)
         ]
 
     def review(self):
+        if self.resolved is None:
+            raise ValueError('No resolved transactions to review')  # pragma: no cover
         def by_section():
             for res, p in zip(self.resolved, self.pipeline_sections):
                 if res:
@@ -1156,6 +1161,8 @@ class PaymentPipeline:
         self.prepared = list(by_section())
 
     def commit(self):
+        if self.resolved is None:
+            raise ValueError('No resolved transactions to commit')  # pragma: no cover
         def by_section():
             for res, p in zip(self.resolved, self.pipeline_sections):
                 if res:
@@ -1164,6 +1171,31 @@ class PaymentPipeline:
                 else:
                     yield []
         self.prepared = list(by_section())
+
+
+class PaymentPipeline(PaymentSubmissionPipeline, ParserErrorAggregator):
+
+    def __init__(self, pipeline_spec: PipelineSpec, parser):
+        submission_spec: SubmissionSpec = [
+            (res_class.resolved_transaction_class, prep_class)
+            for res_class, prep_class in pipeline_spec
+        ]
+        super().__init__(pipeline_spec=submission_spec, parser=parser)
+
+        self.pipeline_sections = [
+            PaymentPipelineSection(resolver, preparator, self)
+            for resolver, preparator in pipeline_spec
+        ]
+        self.prepared: Optional[PipelinePrepared] = None
+        self.resolved: Optional[PipelineResolved] = None
+
+    def resolve(self):
+        if self.resolved is not None:
+            return
+        self.resolved = [
+            list(p.resolve(self.parser.parsed_data))
+            for p in self.pipeline_sections
+        ]
 
 
 class FinancialCSVUploadForm(CSVUploadForm):
