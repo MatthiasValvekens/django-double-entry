@@ -317,6 +317,74 @@ class TestSimplePreparator(TestCase):
         ).count()
         self.assertEqual(pmt_count, 2)
 
+    def test_duplicate_review_with_prehist(self):
+        pmt = models.SimpleCustomerPayment(
+            creditor_id=1, total_amount=Money(32, 'EUR'),
+            timestamp=PARSE_TEST_DATETIME
+        )
+        pmt.save()
+        split = models.SimpleCustomerPaymentSplit(
+            payment=pmt, debt_id=1, amount=pmt.total_amount
+        )
+        split.save()
+        error_context1 = ResolvedTransactionMessageContext()
+        error_context2 = ResolvedTransactionMessageContext()
+        resolved_transaction1 = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
+            message_context=error_context1, do_not_skip=False
+        )
+        resolved_transaction2 = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
+            message_context=error_context2, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleGenericPreparator(
+            resolved_transactions=[
+                (cust, resolved_transaction1),
+                (cust, resolved_transaction2)
+            ]
+        )
+        prep.review()
+        self.assertEqual(
+            {error_context1.verdict, error_context2.verdict},
+            {ResolvedTransactionVerdict.SUGGEST_DISCARD, ResolvedTransactionVerdict.COMMIT}
+        )
+
+    def test_duplicate_commit_with_prehist(self):
+        pmt = models.SimpleCustomerPayment(
+            creditor_id=1, total_amount=Money(32, 'EUR'),
+            timestamp=PARSE_TEST_DATETIME
+        )
+        pmt.save()
+        split = models.SimpleCustomerPaymentSplit(
+            payment=pmt, debt_id=1, amount=pmt.total_amount
+        )
+        split.save()
+        error_context1 = ResolvedTransactionMessageContext()
+        error_context2 = ResolvedTransactionMessageContext()
+        resolved_transaction1 = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
+            message_context=error_context1, do_not_skip=False
+        )
+        resolved_transaction2 = ResolvedTransaction(
+            **SIMPLE_LOOKUP_TEST_RESULT_DATA,
+            message_context=error_context2, do_not_skip=False
+        )
+        cust = models.SimpleCustomer.objects.get(pk=1)
+        prep = models.SimpleGenericPreparator(
+            resolved_transactions=[
+                (cust, resolved_transaction1),
+                (cust, resolved_transaction2)
+            ]
+        )
+        prep.commit()
+        self.assertEqual(
+            {error_context1.verdict, error_context2.verdict},
+            {ResolvedTransactionVerdict.SUGGEST_DISCARD, ResolvedTransactionVerdict.COMMIT}
+        )
+        pmt_count = models.SimpleCustomerPayment.objects.filter(creditor_id=1).count()
+        self.assertEqual(pmt_count, 2)
+
     def test_negative_amount(self):
         # includes an irrelevant field
         error_context = ResolvedTransactionMessageContext()
@@ -1050,3 +1118,103 @@ class TestSubmissionAPI(TestCase):
         self.assertEqual(
             res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
         )
+
+    def test_commit_twice_noforce(self):
+        base_data = {
+            'transaction_party_id': 1,
+            'timestamp': PARSE_TEST_DATETIME,
+            'amount': '32.00',
+            'currency': 'EUR',
+            'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+        }
+        # change up the transaction id for good measure, but it shouldn't matter
+        trans1 = {
+            'transaction_id': 'adsflkajsd',  **base_data
+        }
+        trans2 = {
+            'transaction_id': 'blalalal',  **base_data
+        }
+        response = self.client.post(
+            self.endpoint, data={ 'transactions': [ trans1 ] },
+            content_type='application/json'
+        )
+
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+
+        response = self.client.post(
+            self.endpoint, data={ 'transactions': [ trans2 ] },
+            content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.SUGGEST_DISCARD
+        )
+        self.assertFalse(res['committed'])
+        pmt_count = models.SimpleCustomerPayment.objects.filter(
+            creditor_id=1
+        ).count()
+        self.assertEqual(pmt_count, 1)
+
+    def test_commit_twice_with_force(self):
+        base_data = {
+            'transaction_party_id': 1,
+            'timestamp': PARSE_TEST_DATETIME,
+            'amount': '32.00',
+            'currency': 'EUR',
+            'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+        }
+        # change up the transaction id for good measure, but it shouldn't matter
+        trans1 = {
+            'transaction_id': 'adsflkajsd',  **base_data
+        }
+        trans2 = {
+            'transaction_id': 'blalalal',  'do_not_skip': True,
+            **base_data
+        }
+        response = self.client.post(
+            self.endpoint, data={ 'transactions': [ trans1 ] },
+            content_type='application/json'
+        )
+
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+
+        response = self.client.post(
+            self.endpoint, data={ 'transactions': [ trans2 ] },
+            content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.SUGGEST_DISCARD
+        )
+        self.assertTrue(res['committed'])
+        pmt_count = models.SimpleCustomerPayment.objects.filter(
+            creditor_id=1
+        ).count()
+        self.assertEqual(pmt_count, 2)
+
