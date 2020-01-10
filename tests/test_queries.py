@@ -37,10 +37,30 @@ class TestSimplePaymentQueries(TestCase):
         self.assertEquals(r.balance, r.total_amount)
         self.assertEquals(r.fully_matched_date, None)
 
+    def test_simple_unpaid_bare(self):
+        r: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .get(pk=FIXTURE_UNPAID_PK)
+        self.assertTrue(r.balance)
+        self.assertEquals(r.balance, r.total_amount)
+        self.assertEquals(r.fully_matched_date, None)
 
     def test_perfect_payment(self):
         r: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
             .with_fully_matched_date().get(
+            pk=FIXTURE_PERFECT_PK
+        )
+        self.assertFalse(r.balance)
+        self.assertEquals(
+            r.fully_matched_date, datetime.datetime(
+                2019, 8, 8, 0, 15, 0, tzinfo=pytz.utc
+            )
+        )
+        r: models.SimpleCustomerPayment = models.SimpleCustomerPayment.objects \
+            .with_fully_matched_date().get(pk=FIXTURE_PERFECT_PK)
+        self.assertFalse(r.credit_remaining)
+
+    def test_perfect_payment_bare(self):
+        r: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects.get(
             pk=FIXTURE_PERFECT_PK
         )
         self.assertFalse(r.balance)
@@ -107,7 +127,7 @@ class TestReservationPaymentQueries(TestCase):
 
     def test_perfect_reservation(self):
         r: models.ReservationDebt = models.ReservationDebt.objects\
-            .with_total_price().with_remote_accounts().get(
+            .with_total_price().with_remote_accounts().with_fully_matched_date().get(
                 pk=FIXTURE_PERFECT_PK
             )
         self.assertFalse(r.balance)
