@@ -1230,15 +1230,13 @@ class FinancialCSVUploadForm(CSVUploadForm):
             b=getattr(settings, 'MAX_CSV_UPLOAD', 1024 * 1024)
         )]
     )
-    csv_parser_class = None
 
     def __init__(self, *args, pipeline_spec: PipelineSpec,
                  csv_parser_class: Type['FinancialCSVParser'],
                  upload_field_label: str=_('Upload .csv'), **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['csv'].label = upload_field_label
-        if self.csv_parser_class is None:
-            self.csv_parser_class = csv_parser_class
+        self.csv_parser_class = csv_parser_class
         self.pipeline_spec = pipeline_spec
         self.resolved = None
 
