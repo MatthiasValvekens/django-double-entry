@@ -326,7 +326,7 @@ class LedgerResolver(ErrorContextWrapper, LedgerQuerySetBuilder[TP], Generic[TP,
     def get_index_builders(self) -> List[TransactionPartyIndexBuilder[TP]]:
         raise NotImplementedError
 
-    def resolve_account(self, tinfo: TI, transaction_party_id) -> RT:
+    def resolve_account(self, tinfo: TI, transaction_party_id, **extra_kwargs) -> RT:
         tinfo_dict = dataclasses.asdict(tinfo)
         del tinfo_dict['account_lookup_str']
         del tinfo_dict['line_no']
@@ -334,7 +334,7 @@ class LedgerResolver(ErrorContextWrapper, LedgerQuerySetBuilder[TP], Generic[TP,
         return self.resolved_transaction_class(
             transaction_party_id=transaction_party_id,
             message_context=RTErrorContextFromMixin(self, tinfo),
-            do_not_skip=False, **tinfo_dict
+            do_not_skip=False, **tinfo_dict, **extra_kwargs
         )
 
     def unknown_account(self, account_lookup_str: str, line_nos: List[int]):
