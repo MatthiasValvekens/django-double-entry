@@ -1,6 +1,6 @@
 import dataclasses
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import Type
 
 import pytz
@@ -43,9 +43,9 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
                 amount=Decimal(raw['amount']), currency=raw['currency']
             )
             del raw['currency']
-        except KeyError:
+        except (DecimalException, ValueError, KeyError):
             raise TransactionShapingError(
-                "Transaction amount must be specified in \'amount\' and "
+                "Transaction amount must be specified in decimal \'amount\' and "
                 "\'currency\' fields."
             )
         except ValueError:
@@ -85,7 +85,7 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             if f.type is datetime:
                 try:
                     ts = datetime.fromisoformat(raw_field)
-                except (KeyError, TypeError):
+                except (KeyError, ValueError, TypeError):
                     raise TransactionShapingError(
                         'Could not parse ISO datetime \'%s\'.',
                         raw_field
@@ -212,7 +212,6 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             'transaction_id': transaction_id,
             'errors': [error], 'warnings': [],
             'verdict': bulk_utils.ResolvedTransactionVerdict.DISCARD
-
         }
         if include_commit:
             res['committed'] = False

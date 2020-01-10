@@ -543,6 +543,7 @@ class TestSubmissionAPI(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.endpoint = test_views.pipeline_endpoint.url()
+        cls.alt_endpoint = test_views.AltPipelineEndpoint.url()
 
     def test_simple_submission(self):
         response = self.client.post(
@@ -552,6 +553,124 @@ class TestSubmissionAPI(TestCase):
                         'transaction_id': 'sec-0-trans-0',
                         'transaction_party_id': 1,
                         'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '32.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertTrue(response_payload['all_committed'])
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+        self.assertTrue(res['committed'])
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+    def test_simple_submission_alt_2(self):
+        response = self.client.post(
+            self.alt_endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '32.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'boolean_field_test': False,
+                        'integer_field_test': 1,
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertTrue(response_payload['all_committed'])
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+        self.assertTrue(res['committed'])
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+    def test_simple_submission_alt(self):
+        response = self.client.post(
+            self.alt_endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '32.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'boolean_field_test': 'fAlSe',
+                        'integer_field_test': '1',
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertTrue(response_payload['all_committed'])
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+        self.assertTrue(res['committed'])
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertTrue(debt.paid)
+
+    def test_simple_submission_review(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'commit': False,
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '32.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 200)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1)
+        self.assertFalse(debt.paid)
+        self.assertFalse(
+            models.SimpleCustomerPayment.objects.filter(creditor_id=1).exists()
+        )
+
+    def test_simple_submission_dateonly(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': '2019-08-08',
                         'amount': '32.00',
                         'currency': 'EUR',
                         'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
@@ -631,3 +750,303 @@ class TestSubmissionAPI(TestCase):
             .with_payments().get(debtor_id=1, is_refund=True)
         self.assertEqual(refund.total_amount, Money(18, 'EUR'))
         self.assertTrue(refund.paid)
+
+    def test_simple_submission_negative(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '-50.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_alt_insuff(self):
+        response = self.client.post(
+            self.alt_endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '50.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_alt_insuff_2(self):
+        response = self.client.post(
+            self.alt_endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'amount': '32.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'boolean_field_test': False,
+                        'integer_field_test': 1
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_no_currency(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '50.00',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_bad_amount(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '50.00 EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_no_section_id(self):
+        # TODO: add test for single-section pipeline, which should work
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '50.00',
+                        'currency': 'EUR',
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_no_timestamp(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'amount': '50.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_no_timestamp_typo(self):
+        # test underdefined/overdefined scenario
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'amount': '50.00',
+                        'timestapm': PARSE_TEST_DATETIME,
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_too_many_fields(self):
+        # test underdefined/overdefined scenario
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'amount': '50.00',
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True,  # this should not work
+                        'nonsense_field': 0
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_simple_submission_illegal_timestamp(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': '2018/08/08',
+                        'amount': '50.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )
+
+    def test_submission_bad_transaction_list(self):
+        formally_ok = {
+            'transaction_id': 'sec-0-trans-0',
+            'transaction_party_id': 1,
+            'timestamp': '2018/08/08',
+            'amount': '50.00',
+            'currency': 'EUR',
+            'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+            'do_not_skip': True  # this should not work
+        }
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [ 0, 'abc', formally_ok]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 400)
+
+    def test_simple_submission_no_trans_id(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '50.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 400)
+        # this fails with an API error, because without transaction IDs
+        #  there's no meaningful way to inform the user about what went wrong
+        #  with a specific transaction.
+
+    def test_simple_submission_no_account_id(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '50.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                        'do_not_skip': True  # this should not work
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.DISCARD
+        )

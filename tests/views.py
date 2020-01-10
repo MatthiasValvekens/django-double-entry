@@ -1,11 +1,15 @@
 from collections import OrderedDict
+from dataclasses import dataclass
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from double_entry.forms.csv import KBCCSVParser
 from double_entry.views import FinancialCSVUploadFormView
 from .models import *
-from double_entry.api import register_pipeline_endpoint
+from double_entry.api import (
+    register_pipeline_endpoint,
+    PaymentPipelineAPIEndpoint,
+)
 from webauth import api_utils
 
 test_transfer_pipeline = [
@@ -20,6 +24,18 @@ test_pipeline_api = api_utils.API(
 pipeline_endpoint = register_pipeline_endpoint(
     test_pipeline_api, test_transfer_pipeline
 )
+
+
+# For testing parsing of extra attributes
+@dataclass(frozen=True)
+class TestResolvedTransaction(ResolvedTransaction):
+    boolean_field_test: bool
+    integer_field_test: int
+
+class AltPipelineEndpoint(PaymentPipelineAPIEndpoint):
+    api = test_pipeline_api
+    endpoint_name = 'alt_pipeline_submission'
+    pipeline_spec = [(TestResolvedTransaction, SimpleGenericPreparator)]
 
 class TestTransferFormView(FinancialCSVUploadFormView):
     named_pipeline_spec = OrderedDict([
