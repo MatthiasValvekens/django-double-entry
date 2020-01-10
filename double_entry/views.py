@@ -35,6 +35,9 @@ class FinancialCSVUploadFormView(FormView):
             include_commit=False
         )
 
+    def get_review_context_data(self):
+        return {}
+
     def form_valid(self, form):
         form.review()
 
@@ -57,7 +60,7 @@ class FinancialCSVUploadFormView(FormView):
             for count, (account, transaction) in enumerate(resolved)
         ]
 
-        return render(self.request, self.review_template_name, context={
+        context = {
             'transaction_initial_data': json.dumps(json_initial_data),
             'resolved_by_section': [
                 (ix, name, transform_resolved_in_section(ix, resolved))
@@ -66,4 +69,6 @@ class FinancialCSVUploadFormView(FormView):
             ],
             'endpoint_url': self.get_endpoint_url(),
             'section_count': len(self.named_pipeline_spec)
-        })
+        }
+        context.update(**self.get_review_context_data())
+        return render(self.request, self.review_template_name, context=context)
