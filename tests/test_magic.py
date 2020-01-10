@@ -1,5 +1,4 @@
 from django.test import TestCase
-from djmoney.money import Money
 
 from tests import models
 
@@ -23,6 +22,13 @@ class TestSimpleMagic(TestCase):
         self.assertEqual(
             models.SimpleCustomerPayment.get_split_model(),
             (models.SimpleCustomerPaymentSplit, 'payment')
+        )
+        self.assertEqual(
+            models.SimpleCustomerPaymentSplit.get_double_book_models(),
+            {
+                'debt': models.SimpleCustomerDebt,
+                'payment': models.SimpleCustomerPayment,
+            }
         )
 
     def test_split_manager_link(self):
@@ -86,6 +92,13 @@ class TestComplexMagic(TestCase):
         self.assertEqual(
             models.ReservationPayment.get_split_model(),
             (models.ReservationPaymentSplit, 'payment')
+        )
+        self.assertEqual(
+            models.ReservationPaymentSplit.get_double_book_models(),
+            {
+                'reservation': models.ReservationDebt,
+                'payment': models.ReservationPayment,
+            }
         )
 
     def test_split_manager_link(self):
