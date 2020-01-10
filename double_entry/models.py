@@ -23,10 +23,8 @@ from django.conf import settings
 from djmoney.money import Money
 
 from double_entry.utils import (
-    validated_bulk_query, _dt_fallback, make_token,
-    decimal_to_money,
-    parse_ogm,
-    ogm_from_prefix,
+    validated_bulk_query, make_token,
+    decimal_to_money, parse_ogm, ogm_from_prefix,
 )
 
 __all__ = [
@@ -359,7 +357,14 @@ class DuplicationProtectionMixin(DoubleBookInterface):
         # Hence, we cannot use an exact timestamp as a cutoff point between
         # imports, which would eliminate the need for duplicate
         # checking in practice.
-        sig_kwargs['date'] = timezone.localdate(self.timestamp)
+        if settings.USE_TZ and getattr(settings, 'TRANSACTION_DUPCHECK_SERVER_TZ', False):
+            # compute transaction date in server timezone
+            date = timezone.localdate(self.timestamp)
+        else:
+            # compute transaction date in the timezone submitted with the
+            # transaction
+            date = self.timestamp.date()
+        sig_kwargs['date'] = date
         sig_kwargs['amount'] = self.total_amount.amount
         return cls.__dupcheck_signature_nt(**sig_kwargs)
 
@@ -505,25 +510,15 @@ class DuplicationProtectedQuerySet(DoubleBookQuerySet):
     model: Type[DuplicationProtectionMixin]
 
     # Prepare buckets for duplication check
-    def dupcheck_buckets(self, date_bounds=None):
+    def dupcheck_buckets(self, timestamp_bounds=None):
         if self.model.dupcheck_signature_fields is None:
-            raise TypeError(
+            raise TypeError(  # pragma: no cover
                 'Duplicate checking is not supported on this model.'
             )
         historical_buckets = defaultdict(int)
-        if date_bounds is not None:
-            # replace min/max timestamps by min/max time on the same day
-            # (in the local timezone) and filter
-            min_date, max_date = date_bounds
-            if isinstance(min_date, datetime.datetime):
-                min_date = timezone.localdate(min_date)
-            if isinstance(max_date, datetime.datetime):
-                max_date = timezone.localdate(max_date)
-            # assume that we have a raw date pair now
-            qs = self.filter(
-                timestamp__gte=_dt_fallback(min_date),
-                timestamp__lte=_dt_fallback(max_date, use_max=True)
-            )
+        if timestamp_bounds is not None:
+            min_ts, max_ts = timestamp_bounds
+            qs = self.filter(timestamp__gte=min_ts, timestamp__lte=max_ts)
         else:
             qs = self
 

@@ -48,6 +48,7 @@ from typing import (
     Generic, ClassVar, Dict, Any
 )
 
+import pytz
 from django import forms
 from django.conf import settings
 from django.db.models import ForeignKey, QuerySet
@@ -62,7 +63,10 @@ from double_entry.models import (
     TransactionPartyMixin, BaseDebtPaymentSplit
 )
 from double_entry import models as accounting_base, models
-from double_entry.utils import decimal_to_money, consume_with_result
+from double_entry.utils import (
+    decimal_to_money, consume_with_result,
+    _dt_fallback,
+)
 from double_entry.forms.utils import (
     CSVUploadForm, ErrorMixin,
     ParserErrorAggregator, ErrorContextWrapper,
@@ -579,14 +583,21 @@ class DuplicationProtectedPreparator(LedgerEntryPreparator[LE, TP, RT]):
     def validate_global(self, valid_transactions: PreparedTransactionList):
         valid_transactions = list(super().validate_global(valid_transactions))
         dates = [
-            timezone.localdate(t.transaction.timestamp)
+            t.transaction.timestamp.astimezone(pytz.utc).date()
             for t in valid_transactions
         ]
         if not dates:
             return []
-
+        # create a window wide enough to accommodate timezone shenanigans
+        min_ts = _dt_fallback(
+            min(dates) - datetime.timedelta(days=2), default_timezone=pytz.utc
+        )
+        max_ts = _dt_fallback(
+            max(dates) + datetime.timedelta(days=2), default_timezone=pytz.utc,
+            use_max=True
+        )
         historical_buckets = self.model._default_manager.dupcheck_buckets(
-            date_bounds=(min(dates), max(dates))
+            timestamp_bounds=(min_ts, max_ts)
         )
 
         import_buckets: Dict[Any, List[PreparedTransaction]] = defaultdict(list)
