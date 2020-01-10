@@ -191,7 +191,7 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
     # allow subclasses to add more information if necessary
     # noinspection PyUnusedLocal
     def format_total_response(self, *, pipeline, transaction_list,
-                              faulty_transaction_responses):
+                              faulty_transaction_responses, commit):
         def pipeline_responses():
             # transaction_list now carries all the error data from
             #  the pipeline, if applicable
@@ -199,7 +199,13 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
                 res = self.format_transaction_response(tr, include_commit=True)
                 yield res
             yield from faulty_transaction_responses
-        return { 'pipeline_responses': list(pipeline_responses()) }
+        pl_responses = list(pipeline_responses())
+        response = { 'pipeline_responses': pl_responses }
+        if commit:
+            response['all_committed'] = all(
+                res.get('committed', False) for res in pl_responses
+            )
+        return response
 
     def faulty_transaction(self, transaction_id, error, include_commit):
         res = {
@@ -258,7 +264,7 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             pipeline.review()
         response = self.format_total_response(
             pipeline=pipeline, faulty_transaction_responses=faulty_transactions,
-            transaction_list=transaction_list
+            transaction_list=transaction_list, commit=commit
         )
         return JsonResponse(response, status=201 if commit else 200)
 

@@ -564,6 +564,7 @@ class TestSubmissionAPI(TestCase):
         )
         self.assertEquals(response.status_code, 201)
         response_payload = json.loads(response.content)
+        self.assertTrue(response_payload['all_committed'])
         self.assertEqual(len(response_payload['pipeline_responses']), 1)
         res = response_payload['pipeline_responses'][0]
         self.assertEqual(
@@ -591,6 +592,7 @@ class TestSubmissionAPI(TestCase):
         )
         self.assertEquals(response.status_code, 201)
         response_payload = json.loads(response.content)
+        self.assertTrue(response_payload['all_committed'])
         self.assertEqual(len(response_payload['pipeline_responses']), 1)
         res = response_payload['pipeline_responses'][0]
         self.assertEqual(
