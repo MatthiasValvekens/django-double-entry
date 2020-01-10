@@ -24,7 +24,6 @@ class TransactionShapingError(api_utils.APIError):
 
 class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
     pipeline_spec: bulk_utils.SubmissionSpec = None
-    endpoint_name = 'pipeline_submit'
 
     def __init_subclass__(cls, abstract=False, **kwargs):
         super().__init_subclass__(abstract=abstract)
@@ -269,7 +268,8 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
 
 
 def register_pipeline_endpoint(api: api_utils.API,
-                               pipeline_spec: bulk_utils.PipelineSpec) -> Type['PaymentPipelineAPIEndpoint']:
+                               pipeline_spec: bulk_utils.PipelineSpec,
+                               endpoint_name=None) -> Type['PaymentPipelineAPIEndpoint']:
 
     class _PipelineEndpoint(PaymentPipelineAPIEndpoint, abstract=True):
         def get_queryset(self, pipeline_section_id):
@@ -280,7 +280,8 @@ def register_pipeline_endpoint(api: api_utils.API,
         'PipelineEndpointFor' + api.__class__.__name__,
         (_PipelineEndpoint,), {
             'api': api,
-            'pipeline_spec': bulk_utils.as_submission_spec(pipeline_spec)
+            'pipeline_spec': bulk_utils.as_submission_spec(pipeline_spec),
+            'endpoint_name': endpoint_name or 'pipeline_submit'
         }
     )
     assert issubclass(endpoint_class, PaymentPipelineAPIEndpoint)
