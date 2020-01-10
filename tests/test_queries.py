@@ -3,6 +3,8 @@ from decimal import Decimal
 
 import pytz
 from django.test import TestCase
+from djmoney.money import Money
+
 from tests import models
 
 FIXTURE_EVENT_PK = 1
@@ -51,6 +53,36 @@ class TestSimplePaymentQueries(TestCase):
             .with_fully_matched_date().get(pk=FIXTURE_PERFECT_PK)
         self.assertFalse(r.credit_remaining)
 
+
+    def test_fully_paid_easy(self):
+        fully_paid_bare = models.SimpleCustomerDebt.objects.get(pk=2)
+        lazy_result = fully_paid_bare.matched_balance
+        fully_paid_prepped = models.SimpleCustomerDebt.objects.with_remote_accounts().get(pk=2)
+        eager_result = fully_paid_prepped.matched_balance
+        self.assertEqual(lazy_result, Money(24, 'EUR'))
+        self.assertEqual(eager_result, Money(24, 'EUR'))
+        self.assertTrue(fully_paid_bare.paid)
+        self.assertTrue(fully_paid_prepped.paid)
+
+    def test_fully_paid_complex(self):
+        fully_paid_bare = models.SimpleCustomerDebt.objects.get(pk=5)
+        lazy_result = fully_paid_bare.matched_balance
+        fully_paid_prepped = models.SimpleCustomerDebt.objects.with_remote_accounts().get(pk=5)
+        eager_result = fully_paid_prepped.matched_balance
+        self.assertEqual(lazy_result, Money(12, 'EUR'))
+        self.assertEqual(eager_result, Money(12, 'EUR'))
+        self.assertTrue(fully_paid_bare.paid)
+        self.assertTrue(fully_paid_prepped.paid)
+
+    def test_spoof(self):
+        fully_paid_prepped = models.SimpleCustomerDebt.objects.with_remote_accounts().get(pk=2)
+        eager_result = fully_paid_prepped.matched_balance
+        eager_result_unm = fully_paid_prepped.unmatched_balance
+        self.assertEqual(eager_result, Money(24, 'EUR'))
+        self.assertEqual(eager_result_unm, Money(0, 'EUR'))
+        fully_paid_prepped.spoof_matched_balance(11)
+        self.assertEqual(fully_paid_prepped.matched_balance, Money(11, 'EUR'))
+        self.assertEqual(fully_paid_prepped.unmatched_balance, Money(13, 'EUR'))
 
 
 class TestReservationPaymentQueries(TestCase):
@@ -108,4 +140,3 @@ class TestReservationPaymentQueries(TestCase):
         self.assertEquals(r.total_amount.amount, Decimal('7.00'))
         self.assertFalse(r.balance)
         self.assertEquals(r.ticket_face_value.amount, Decimal('32.00'))
-

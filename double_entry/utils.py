@@ -140,6 +140,8 @@ SEARCH_PATTERN = re.compile(OGM_REGEX)
 
 
 def decimal_to_money(d, currency=None):
+    if isinstance(d, int):
+        d = Decimal(d)
     if currency is None:
         currency = settings.DEFAULT_CURRENCY
     return Money(

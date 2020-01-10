@@ -266,6 +266,9 @@ class DoubleBookInterface(models.Model):
         try:
             # invalidate cache
             del self.__dict__['matched_balance']
+        except KeyError:
+            pass
+        try:
             del self.__dict__['unmatched_balance']
         except KeyError:
             pass

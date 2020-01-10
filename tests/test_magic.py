@@ -1,4 +1,5 @@
 from django.test import TestCase
+from djmoney.money import Money
 
 from tests import models
 
