@@ -23,6 +23,7 @@ from double_entry.forms.bulk_utils import (
 )
 from double_entry.forms.csv import BankTransactionInfo
 from double_entry.forms.transfers import TransferResolver
+from double_entry.models import GnuCashCategory
 from double_entry.utils import decimal_to_money, validated_bulk_query
 
 
@@ -137,6 +138,12 @@ class SimpleGenericResolver(LedgerResolver):
 class SimpleGenericPreparator(DuplicationProtectedPreparator,
                               StandardCreditApportionmentMixin):
     transaction_party_model = SimpleCustomer
+    no_refunds = False
+
+    def get_refund_credit_gnucash_account(self, debt_key):
+        if self.no_refunds:
+            return None
+        return GnuCashCategory.get_category('refund')
 
 class Event(models.Model):
     name = models.CharField(max_length=100)
@@ -348,3 +355,9 @@ class ReservationTransferResolver(TransferResolver[TicketCustomer,
 
 class ReservationPreparator(DuplicationProtectedPreparator, StandardCreditApportionmentMixin):
     transaction_party_model = TicketCustomer
+    no_refunds = False
+
+    def get_refund_credit_gnucash_account(self, debt_key):
+        if self.no_refunds:
+            return None
+        return GnuCashCategory.get_category('refund')

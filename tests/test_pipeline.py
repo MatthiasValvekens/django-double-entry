@@ -10,7 +10,6 @@ from double_entry.forms.bulk_utils import (
     ResolvedTransaction,
     ResolvedTransactionVerdict,
 )
-from double_entry.models import GnuCashCategory
 from . import models, views as test_views
 from .test_csv import PARSE_TEST_DATETIME, SIMPLE_LOOKUP_TEST_RESULT_DATA
 
@@ -194,6 +193,7 @@ class TestSimplePreparator(TestCase):
         prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
+        prep.no_refunds = True
         prep.commit()
         debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
             .with_payments().get(debtor_id=1, is_refund=False)
@@ -216,15 +216,13 @@ class TestSimplePreparator(TestCase):
         prep = models.SimpleGenericPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
-        refund_cat = GnuCashCategory.get_category('refund')
-        prep.refund_credit_gnucash_account = refund_cat
         prep.commit()
         debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
             .with_payments().get(debtor_id=1, is_refund=False)
         self.assertTrue(debt.paid)
         refund: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
             .with_payments().get(debtor_id=1, is_refund=True)
-        self.assertTrue(refund.gnucash_category == refund_cat)
+        self.assertEquals(refund.gnucash_category.name, 'refund')
         self.assertTrue(refund.fully_matched)
         pmt: models.SimpleCustomerPayment = models.SimpleCustomerPayment.objects \
             .with_debts().get(creditor_id=1)
@@ -413,6 +411,7 @@ class TestReservationPreparator(TestCase):
         prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
+        prep.no_refunds = True
         prep.commit()
         debt: models.ReservationDebt = models.ReservationDebt.objects \
             .with_payments().get(owner_id=1, is_refund=False)
@@ -435,15 +434,13 @@ class TestReservationPreparator(TestCase):
         prep = models.ReservationPreparator(
             resolved_transactions=[(cust, resolved_transaction)]
         )
-        refund_cat = GnuCashCategory.get_category('refund')
-        prep.refund_credit_gnucash_account = refund_cat
         prep.commit()
         debt: models.ReservationDebt = models.ReservationDebt.objects \
             .with_payments().get(owner_id=1, is_refund=False)
         self.assertTrue(debt.paid)
         refund: models.ReservationDebt = models.ReservationDebt.objects \
             .with_payments().get(owner_id=1, is_refund=True)
-        self.assertTrue(refund.gnucash_category == refund_cat)
+        self.assertEquals(refund.gnucash_category.name, 'refund')
         self.assertTrue(refund.fully_matched)
         pmt: models.ReservationPayment = models.ReservationPayment.objects \
             .with_debts().get(customer_id=1)
@@ -602,3 +599,35 @@ class TestSubmissionAPI(TestCase):
         debt: models.SimpleCustomerDebt = models.ReservationDebt.objects \
             .with_payments().get(owner_id=1)
         self.assertTrue(debt.paid)
+
+    def test_simple_submission_overpay(self):
+        response = self.client.post(
+            self.endpoint, data={
+                'transactions': [
+                    {
+                        'transaction_id': 'sec-0-trans-0',
+                        'transaction_party_id': 1,
+                        'timestamp': PARSE_TEST_DATETIME,
+                        'amount': '50.00',
+                        'currency': 'EUR',
+                        'pipeline_section_id': PIPELINE_SIMPLE_SECTION,
+                    }
+                ]
+            }, content_type='application/json'
+        )
+        self.assertEquals(response.status_code, 201)
+        response_payload = json.loads(response.content)
+        self.assertTrue(response_payload['all_committed'])
+        self.assertEqual(len(response_payload['pipeline_responses']), 1)
+        res = response_payload['pipeline_responses'][0]
+        self.assertEqual(
+            res['verdict'], bulk_utils.ResolvedTransactionVerdict.COMMIT
+        )
+        self.assertTrue(res['committed'])
+        debt: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1, is_refund=False)
+        self.assertTrue(debt.paid)
+        refund: models.SimpleCustomerDebt = models.SimpleCustomerDebt.objects \
+            .with_payments().get(debtor_id=1, is_refund=True)
+        self.assertEqual(refund.total_amount, Money(18, 'EUR'))
+        self.assertTrue(refund.paid)
