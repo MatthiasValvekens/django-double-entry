@@ -262,13 +262,18 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
         )
         return JsonResponse(response, status=201 if commit else 200)
 
+
 def register_pipeline_endpoint(api: api_utils.API,
                                pipeline_spec: bulk_utils.PipelineSpec) -> Type['PaymentPipelineAPIEndpoint']:
-    # TODO use ledger preparator QS in API?
+
+    class _PipelineEndpoint(PaymentPipelineAPIEndpoint, abstract=True):
+        def get_queryset(self, pipeline_section_id):
+            resolver_cls, preparator_cls = pipeline_spec[pipeline_section_id]
+            return resolver_cls.base_query_set()
+
     endpoint_class = type(
         'PipelineEndpointFor' + api.__class__.__name__,
-        (PaymentPipelineAPIEndpoint,),
-        {
+        (_PipelineEndpoint,), {
             'api': api,
             'pipeline_spec': bulk_utils.as_submission_spec(pipeline_spec)
         }
