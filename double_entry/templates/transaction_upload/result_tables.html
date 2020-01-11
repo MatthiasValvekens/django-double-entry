@@ -1,6 +1,4 @@
 {% load i18n %}
-{% for pipeline_section, name, resolved_list in resolved_by_section %}
-    <h2>{{ name }}</h2>
     <table class="transaction-upload-results" data-pipeline-section-id="{{ pipeline_section }}" id="{{ pipeline_section_id_prefix|default:'pipeline-section' }}-{{ pipeline_section }}">
         <thead>
             <tr>
@@ -18,4 +16,3 @@
             {% endfor %}
         </tbody>
     </table>
-{% endfor %}

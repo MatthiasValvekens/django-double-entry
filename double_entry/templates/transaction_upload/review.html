@@ -33,7 +33,9 @@
 </head>
 <body>
     {% csrf_token %}
-    {% include 'transaction_upload/result_tables.html' %}
+    {% for pipeline_section, resolved_list in resolved_by_section %}
+        {% include 'transaction_upload/result_tables.html' %}
+    {% endfor %}
     <button id="submit-transactions">Submit transactions</button>
 </body>
 </html>
