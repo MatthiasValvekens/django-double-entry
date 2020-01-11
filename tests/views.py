@@ -1,10 +1,12 @@
-from collections import OrderedDict
 from dataclasses import dataclass
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from double_entry.forms.csv import KBCCSVParser
-from double_entry.views import FinancialCSVUploadFormView
+from double_entry.views import (
+    FinancialCSVUploadFormView,
+    FinancialCSVUploadFormSetup,
+)
 from .models import *
 from double_entry.api import (
     register_pipeline_endpoint,
@@ -37,13 +39,14 @@ class AltPipelineEndpoint(PaymentPipelineAPIEndpoint):
     endpoint_name = 'alt_pipeline_submission'
     pipeline_spec = [(TestResolvedTransaction, SimpleGenericPreparator)]
 
+
+
 class TestTransferFormView(FinancialCSVUploadFormView):
-    named_pipeline_spec = OrderedDict([
-        ('Simple', test_transfer_pipeline[0]),
-        ('Tickets', test_transfer_pipeline[1])
-    ])
-    csv_parser_class = KBCCSVParser
-    endpoint = pipeline_endpoint
+    form_setup = FinancialCSVUploadFormSetup(
+        pipeline_spec=test_transfer_pipeline,
+        csv_parser_class=KBCCSVParser,
+        endpoint=pipeline_endpoint
+    )
 
     @staticmethod
     def hook_simple_lookup_test(request):
