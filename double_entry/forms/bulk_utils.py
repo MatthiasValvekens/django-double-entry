@@ -55,6 +55,7 @@ from django.db.models import ForeignKey, QuerySet
 from django.utils import timezone
 from django.utils.translation import (
     ugettext_lazy as _,
+    ugettext,
 )
 from djmoney.money import Money
 
@@ -178,11 +179,11 @@ class TransactionWithMessages:
 
 
 def broadcast_error(transactions: List[TransactionWithMessages],
-                        msg: str, params: Optional[dict]):
+                        msg: str, params: Optional[dict]=None):
     _broadcast('error', transactions, msg, params)
 
 def broadcast_warning(transactions: List[TransactionWithMessages],
-                    msg: str, params: Optional[dict]):
+                    msg: str, params: Optional[dict]=None):
     _broadcast('warning', transactions, msg, params)
 
 def _broadcast(what, transactions: List[TransactionWithMessages],
@@ -487,7 +488,7 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
         if transaction.amount.amount < 0:
             err: ResolvedTransactionMessageContext = transaction.message_context
             err.error(
-                _('Payment amount %(amount)s is negative.'), {
+                ugettext('Payment amount %(amount)s is negative.'), {
                     'amount': transaction.amount
                 }
             )
@@ -877,7 +878,7 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
 
     @property
     def overpayment_fmt_string(self):
-        return _(
+        return ugettext(
             'Received %(total_credit)s, but only %(total_used)s '
             'can be applied to outstanding debts. '
             'Payment(s) dated %(payment_dates)s have outstanding '
@@ -1165,7 +1166,7 @@ class PaymentSubmissionPipeline:
                     yield account, rt
                 except KeyError:
                     rt.message_context.error(
-                        _('Account with id \'%(pk)d\' not found'),
+                        ugettext('Account with id \'%(pk)d\' not found'),
                         params={'pk': rt.transaction_party_id}
                     )
 
@@ -1239,6 +1240,7 @@ class FinancialCSVUploadForm(CSVUploadForm):
         self.csv_parser_class = csv_parser_class
         self.pipeline_spec = pipeline_spec
         self.resolved = None
+        self.pipeline_errors = None
 
     def review(self):
         parser: FinancialCSVParser = self.cleaned_data['csv']
@@ -1250,3 +1252,4 @@ class FinancialCSVUploadForm(CSVUploadForm):
         # the PreparedTransactions aren't directly necessary for now
         assert pipeline.resolved is not None
         self.resolved = pipeline.resolved
+        self.pipeline_errors = pipeline.errors
