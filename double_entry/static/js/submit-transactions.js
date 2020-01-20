@@ -3,10 +3,11 @@ function collectTransactions(elementId) {
     let pipelineSectionId = collection.attr('data-pipeline-section-id');
     return $(`#${elementId} .resolved-transaction`).map(function() {
         let row_id = this.id;
-        let row_data =  {
-            pipeline_section_id: pipelineSectionId,
-            transaction_id: row_id
-        };
+        let row_data = { transaction_id: row_id };
+        // if undefined, we assume that it isn't necessary
+        if (typeof pipelineSectionId !== typeof undefined && pipelineSectionId !== false) {
+            row_data.pipeline_section_id = pipelineSectionId;
+        }
         $.each(this.attributes, function (i, attr) {
             if(attr.name.startsWith('data-') && attr.specified) {
                 let parameterName = attr.name.substring(5).replace(/-/g, '_');
