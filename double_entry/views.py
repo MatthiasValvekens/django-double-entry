@@ -82,9 +82,13 @@ class BaseFinancialCSVUploadFormView(FormView):
                 (ix, transform_resolved_in_section(ix, resolved))
                 for ix, resolved in enumerate(form.resolved)
             ],
+            'pipeline_errors': form.pipeline_errors,
             'endpoint_url': self.get_endpoint_url(),
             'section_count': len(self.form_setup.pipeline_spec)
         }
+        # simplification if the pipeline only has one index
+        if len(form.resolved) == 1:
+            context['resolved_list'] = context['resolved_by_section'][0][1]
         context.update(**self.get_review_context_data())
         return render(self.request, self.form_setup.review_template_name, context=context)
 
@@ -152,7 +156,11 @@ class MultiFinancialCSVUploadFormView(BaseFinancialCSVUploadFormView):
         return self.get_selected_index()
 
     def get_form_kwargs(self):
-        if self.form_setup is not None:
-            return self.get_form_kwargs_for_setup(self.form_setup)
+        if self.get_setup() is not None:
+            kwargs = self.get_form_kwargs_for_setup(self.form_setup)
+            ix = self.get_selected_index()
+            assert ix is not None
+            kwargs['prefix'] = ix
+            return kwargs
         else:
-            return None
+            return {}
