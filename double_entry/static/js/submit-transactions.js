@@ -18,7 +18,14 @@ function collectTransactions(elementId) {
     }).get();
 }
 
-function processResponse({transaction_id, errors, warnings, verdict}) {
+function processResponse({transaction_id, errors, warnings, verdict, committed=false}, commitIntention=false) {
+    // TODO when we add proper support for skipping, this should be changed
+    //  since a do_not_skip request with this response would warrant review
+    if(committed || (commitIntention && verdict === 1)) {
+        // remove item from view, no longer relevant
+        $(`#${transaction_id}`).remove();
+        return;
+    }
     // update with feedback from api
     let successFeedback = "";
     let verdict_class;
@@ -48,14 +55,17 @@ function processResponse({transaction_id, errors, warnings, verdict}) {
     element.html(feedback_html);
 }
 
-function submitTransactions(endpointUrl, elementIds, commit=true, responseCallback=processResponse) {
+function submitTransactions(endpointUrl, elementIds, commit=true, responseCallback=processResponse, allCommittedCallback=null) {
     let transactionLists = elementIds.map(collectTransactions);
     let transactions = [].concat.apply([], transactionLists);
     let postData = { commit: commit, transactions: transactions };
     $.ajax({
         url: endpointUrl, method: "post", dataType: "json",
         data: JSON.stringify(postData)
-    }).done(function ({pipeline_responses}) {
-        $.each(pipeline_responses,responseCallback);
+    }).done(function ({pipeline_responses, all_committed=false}) {
+        pipeline_responses.forEach(resp => responseCallback(resp, true));
+        if(allCommittedCallback !== null) {
+            allCommittedCallback(all_committed);
+        }
     });
 }

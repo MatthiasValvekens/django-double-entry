@@ -24,7 +24,7 @@
                 k => `${pipelineSectionIdPrefix}-${k}`
             );
             // format error data
-            $.map(transactionsInitial, processResponse);
+            $.map(transactionsInitial, (resp => processResponse(resp)));
             $('#submit-transactions').click(function (){
                 submitTransactions(endpointUrl, pipelineSectionTables, true);
             });
