@@ -34,6 +34,9 @@ def rt_html_tags(resolved_transaction: ResolvedTransaction):
     #  but seems like overkill for now.
     def attrs():
         for name, val in attr_dict.items():
+            # skip None values
+            if val is None:
+                continue
             name = normalise_attr_name(name)
             if name == 'amount':
                 assert isinstance(val, Money)
