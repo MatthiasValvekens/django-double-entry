@@ -24,6 +24,7 @@ class BaseFinancialCSVUploadFormView(FormView):
     template_name: str = 'transaction_upload/upload_form_view.html'
     form_class = bulk_utils.FinancialCSVUploadForm
     form_setup = None
+    extra_review_context = {}
 
     def get_setup(self) -> Optional[FinancialCSVUploadFormSetup]:
         raise NotImplementedError
@@ -52,7 +53,7 @@ class BaseFinancialCSVUploadFormView(FormView):
         )
 
     def get_review_context_data(self):
-        return {}
+        return self.extra_review_context
 
     def form_valid(self, form):
         form.review()
