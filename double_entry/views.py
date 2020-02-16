@@ -52,8 +52,9 @@ class BaseFinancialCSVUploadFormView(FormView):
             include_commit=False
         )
 
-    def get_review_context_data(self):
-        return self.extra_review_context
+    def get_review_context_data(self, context, pipeline_state):
+        context.update(**self.extra_review_context)
+        return context
 
     def form_valid(self, form):
         form.review()
@@ -87,11 +88,16 @@ class BaseFinancialCSVUploadFormView(FormView):
             'endpoint_url': self.get_endpoint_url(),
             'section_count': len(self.form_setup.pipeline_spec)
         }
+
         # simplification if the pipeline only has one index
         if len(form.resolved) == 1:
             context['resolved_list'] = context['resolved_by_section'][0][1]
-        context.update(**self.get_review_context_data())
-        return render(self.request, self.form_setup.review_template_name, context=context)
+        context = self.get_review_context_data(
+            context, form.pipeline_final_state
+        )
+        return render(
+            self.request, self.form_setup.review_template_name, context=context
+        )
 
 class FinancialCSVUploadFormView(BaseFinancialCSVUploadFormView):
     setup: FinancialCSVUploadFormSetup

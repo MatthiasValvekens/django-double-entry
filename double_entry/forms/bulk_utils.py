@@ -1241,8 +1241,21 @@ class FinancialCSVUploadForm(CSVUploadForm):
         self.fields['csv'].label = upload_field_label
         self.csv_parser_class = csv_parser_class
         self.pipeline_spec = pipeline_spec
-        self.resolved = None
-        self.pipeline_errors = None
+        self.pipeline_final_state = None
+
+    @property
+    def resolved(self):
+        return (
+            self.pipeline_final_state.resolved
+            if self.pipeline_final_state is not None else None
+        )
+
+    @property
+    def pipeline_errors(self):
+        return (
+            self.pipeline_final_state.errors
+            if self.pipeline_final_state is not None else None
+        )
 
     def review(self):
         parser: FinancialCSVParser = self.cleaned_data['csv']
@@ -1253,5 +1266,4 @@ class FinancialCSVUploadForm(CSVUploadForm):
         pipeline.review()
         # the PreparedTransactions aren't directly necessary for now
         assert pipeline.resolved is not None
-        self.resolved = pipeline.resolved
-        self.pipeline_errors = pipeline.errors
+        self.pipeline_final_state = pipeline
