@@ -1142,6 +1142,15 @@ class PaymentSubmissionPipeline:
             for rt_class, preparator in pipeline_spec
         ]
         self.rt_classes = [rt_class for rt_class, preparator in pipeline_spec]
+        self.preparators_final_state: Optional[List[LedgerEntryPreparator]] = None
+
+    @property
+    def prepared(self) -> Optional[PipelinePrepared]:
+        if self.preparators_final_state is None:
+            return None
+        return [
+            p.valid_transactions for p in self.preparators_final_state
+        ]
 
     def submit_resolved(self, resolved: List[Tuple[QuerySet, List[ResolvedTransaction]]]):
         def resolved_for_pipeline(qs, rt_class, transactions):
@@ -1176,28 +1185,22 @@ class PaymentSubmissionPipeline:
         ]
 
     def review(self):
-        if self.resolved is None:
-            raise ValueError('No resolved transactions to review')  # pragma: no cover
-        def by_section():
-            for res, p in zip(self.resolved, self.pipeline_sections):
-                if res:
-                    prep = p.review(res)
-                    yield prep.valid_transactions
-                else:
-                    yield []
-        self.prepared = list(by_section())
+        self._trigger_pipeline(commit=False)
 
     def commit(self):
+        self._trigger_pipeline(commit=True)
+
+    def _trigger_pipeline(self, *, commit: bool):
         if self.resolved is None:
-            raise ValueError('No resolved transactions to commit')  # pragma: no cover
-        def by_section():
-            for res, p in zip(self.resolved, self.pipeline_sections):
-                if res:
-                    prep = p.commit(res)
-                    yield prep.valid_transactions
-                else:
-                    yield []
-        self.prepared = list(by_section())
+            raise ValueError( # pragma: no cover
+                'No resolved transactions to %s' % (
+                    'commit' if commit else 'review'
+                )
+            )
+        self.preparators_final_state = [
+            p.commit(res) if commit else p.review(res)
+            for res, p in zip(self.resolved, self.pipeline_sections)
+        ]
 
 
 class PaymentPipeline(PaymentSubmissionPipeline, ParserErrorAggregator):
@@ -1213,7 +1216,6 @@ class PaymentPipeline(PaymentSubmissionPipeline, ParserErrorAggregator):
             PaymentPipelineSection(resolver, preparator, self)
             for resolver, preparator in pipeline_spec
         ]
-        self.prepared: Optional[PipelinePrepared] = None
         self.resolved: Optional[PipelineResolved] = None
 
     def resolve(self):
