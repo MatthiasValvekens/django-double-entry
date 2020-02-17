@@ -218,12 +218,20 @@ class TransactionPartyIndexBuilder(Generic[TP]):
 
     def __init__(self, resolver: 'LedgerResolver'):
         self.resolver = resolver
+        # XXX does it really make sense to put this here?
+        self.transactions_accepted = []
 
     def lookup(self, account_lookup_str: str) -> Optional[TP]:
         raise NotImplementedError
 
     def append(self, tinfo):
         raise NotImplementedError
+
+    def attempt_transaction_submission(self, tinfo):
+        appended = self.append(tinfo)
+        if appended:
+            self.transactions_accepted.append(tinfo)
+        return appended
 
     def execute_query(self):
         raise NotImplementedError
@@ -309,11 +317,6 @@ class LedgerResolver(ErrorContextWrapper, LedgerQuerySetBuilder[TP], Generic[TP,
         'Skipped processing.'
     )
 
-    unparseable_account_message = _(
-        'Designation %(account)s could not be parsed. '
-        'Skipped processing.'
-    )
-
     def __init__(self, error_context: ErrorMixin):
         super().__init__(error_context)
 
@@ -322,6 +325,12 @@ class LedgerResolver(ErrorContextWrapper, LedgerQuerySetBuilder[TP], Generic[TP,
         if cls.transaction_party_model is None and not abstract:  # pragma: no cover
             raise TypeError('Ledger resolver must set transaction_party_model')
         super().__init_subclass__(*args, **kwargs)
+
+    # initialise and start the resolver
+    @classmethod
+    def spawn(cls, error_context):
+        return cls(error_context)()
+
 
     @abc.abstractmethod
     def get_index_builders(self) -> List[TransactionPartyIndexBuilder[TP]]:
@@ -350,50 +359,52 @@ class LedgerResolver(ErrorContextWrapper, LedgerQuerySetBuilder[TP], Generic[TP,
             params={'account': account_lookup_str}
         )
 
-    def unparseable_account(self, account_lookup_str: str, line_no: int):
-        if self.unparseable_account_message is not None:
-            self.error_at_line(
-                line_no, self.unparseable_account_message,
-                params={'account': account_lookup_str}
-            )
-
-    def populate_indexes(self, transactions: List[TI]) \
-            -> List[TransactionPartyIndexBuilder[TP]]:
-        indexes = self.get_index_builders()
-        # first, prime the index builders with all lookup strings
-        for info in transactions:
-            appended = False
+    def _populate_indexes(self, indexes: List[TransactionPartyIndexBuilder]) \
+            -> Generator[bool, TI, None]:
+        info = yield
+        while True:
+            accepted = False
             for builder in indexes:
-                appended |= builder.append(info)
-                if appended:
+                accepted = builder.attempt_transaction_submission(info)
+                if accepted:
                     break
-            if not appended:
-                self.unparseable_account(
-                    info.account_lookup_str, info.line_no
-                )
+            info = yield accepted
+
+    def __call__(self):
+        # ready populate_indexes for consumption
+        indexes = self.get_index_builders()
+        submission_coroutine = self._populate_indexes(indexes)
+        next(submission_coroutine)
+        # first, prime the index builders with all lookup strings
+        # we invite the caller to submit transactions
+        yield submission_coroutine
+
+        # submission phase is over
         # execute bulk lookup DB queries
         #  (the index builders are given the opportunity to not hammer the DB)
         for index in indexes:
             index.execute_query()
-        return indexes
 
-    def __call__(self, transactions: List[TI]) -> Iterable[Tuple[TP, RT]]:
-        # TODO: this is kind of a silly way of doing things
+        # walk through all indexes to collect account data
+        # this is kind of a silly way of doing things,
+        # especially since the index builders already divvy up the data
+        # in pretty much the same way. However, delegating this to the index
+        # builders in full is also bad, both from a separation of concerns PoV,
+        # and because an account can technically be referenced from multiple
+        # transactions using different referencing methods (hence passing
+        # through distinct indexes).
+        # I think this is the least insane way to proceed.
         _by_id: Dict[int, TP] = {}
         _resolved_by_id: Dict[int, List[RT]] = defaultdict(list)
-
-        indexes = self.populate_indexes(transactions)
-        for info in transactions:
-            # walk through indexes to collect account data
-            for index in indexes:
+        for index in indexes:
+            for info in index.transactions_accepted:
                 account = index.lookup(info.account_lookup_str)
                 if account is not None:
                     _by_id[account.pk] = account
                     resolved = self.resolve_account(info, account.pk)
                     _resolved_by_id[account.pk].append(resolved)
-                    break
-            # no need to generate an error if we get here, the
-            # index builders will have taken care of that
+                # no need to generate an error if we get here, the
+                # index builders will have taken care of that
 
         for account_id, acct in _by_id.items():
             for resolved in _resolved_by_id[account_id]:
@@ -1107,11 +1118,8 @@ class PaymentPipelineSection(SubmissionPipelineSection, Generic[LE,TP,TI,RT]):
         self.resolver_class = resolver_class
         self.error_context = error_context
 
-    def resolve(self, parsed_data: List[TI]) -> Iterable[Tuple[TP,RT]]:
-        resolver: LedgerResolver[TP, TI, RT] = self.resolver_class(
-            self.error_context
-        )
-        return resolver(parsed_data)
+    def spawn_resolver(self):
+        return self.resolver_class.spawn(self.error_context)
 
 ResolvedSection = List[Tuple[TransactionPartyMixin, ResolvedTransaction]]
 PipelineResolved = List[ResolvedSection]
@@ -1202,8 +1210,15 @@ class PaymentSubmissionPipeline:
             for res, p in zip(self.resolved, self.pipeline_sections)
         ]
 
+# TODO maybe set these up as couroutines as well? That would enforce
+#  separation of concerns at a lower level
 
 class PaymentPipeline(PaymentSubmissionPipeline, ParserErrorAggregator):
+
+    unparseable_account_message = _(
+        'Designation %(account)s could not be parsed. '
+        'Skipped processing.'
+    )
 
     def __init__(self, pipeline_spec: PipelineSpec, parser):
         submission_spec: SubmissionSpec = [
@@ -1218,12 +1233,33 @@ class PaymentPipeline(PaymentSubmissionPipeline, ParserErrorAggregator):
         ]
         self.resolved: Optional[PipelineResolved] = None
 
+    def unparseable_account(self, account_lookup_str: str, line_no: int):
+        if self.unparseable_account_message is not None:
+            self.error_at_line(
+                line_no, self.unparseable_account_message,
+                params={'account': account_lookup_str}
+            )
+
     def resolve(self):
         if self.resolved is not None:
             return
+        resolvers = [p.spawn_resolver() for p in self.pipeline_sections]
+        submission = [next(r) for r in resolvers]
+        for info in self.parser.parsed_data:
+            accepted = False
+            # attempt to submit transactions
+            for submitter in submission:
+                accepted = submitter.send(info)
+                if accepted:
+                    break
+            # the transaction was not accepted for resolution by any part of
+            #  the pipeline
+            if not accepted:
+                self.unparseable_account(info.account_lookup_str, info.line_no)
+                pass
+        # collect transactions from resolvers
         self.resolved = [
-            list(p.resolve(self.parser.parsed_data))
-            for p in self.pipeline_sections
+            list(r) for r in resolvers
         ]
 
 

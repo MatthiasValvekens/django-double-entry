@@ -205,7 +205,7 @@ class FortisCSVParser(BankCSVParser):
         m = FORTIS_SEARCH_PATTERN.search(row['Details'])
         if m is None:
             return None
-        return m.group(0)
+        return m.group(0), True
 
 
 class KBCCSVParser(BankCSVParser):

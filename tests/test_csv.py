@@ -154,14 +154,19 @@ class TestBankCSVs(TestCase):
             nonlocal unseen_ogms
             unseen_ogms = unseen
 
-        resolver = models.SimpleTransferResolver(error_feedback)
+        resolver = models.SimpleTransferResolver.spawn(error_feedback)
         from double_entry.forms.transfers import TransferTransactionIndexBuilder
         mockery = mock.patch.object(
             TransferTransactionIndexBuilder, 'report_invalid_ogms',
             new=unseen_callback
         )
         with mockery:
-            results = list(resolver(SIMPLE_LOOKUP_TEST_POSTPARSE))
+            resolver_submission = next(resolver)
+            for tinfo in SIMPLE_LOOKUP_TEST_POSTPARSE:
+                self.assertTrue(
+                    resolver_submission.send(tinfo), msg=tinfo.account_lookup_str
+                )
+            results = list(resolver)
         self.assertEqual(
             unseen_ogms, {'+++154/5988/69980+++', '+++176/0220/59911+++'}
         )
@@ -184,9 +189,15 @@ class TestNameLookup(TestCase):
             test_case=self, expected_error_lines={2,3}
         )
 
-        resolver = models.SimpleGenericResolver(error_feedback)
-        results = list(resolver(SIMPLE_NAME_LOOKUP_TEST_POSTPARSE))
+        resolver = models.SimpleGenericResolver.spawn(error_feedback)
+        resolver_submission = next(resolver)
+        for tinfo in SIMPLE_NAME_LOOKUP_TEST_POSTPARSE:
+            self.assertTrue(
+                resolver_submission.send(tinfo), msg=tinfo.account_lookup_str
+            )
+        results = list(resolver)
         error_feedback.assert_errors()
+
         self.assertEqual(len(results), 2)
         ((cust1, rt1), (cust2, rt2)) = results
         self.assertEqual(cust1.pk, 1)
