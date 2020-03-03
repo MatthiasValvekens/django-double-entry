@@ -6,6 +6,7 @@ import re
 import secrets
 from decimal import Decimal, DecimalException
 from collections import defaultdict, OrderedDict
+from typing import Generator, TypeVar, Any, List, Tuple
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -19,6 +20,17 @@ from moneyed import EUR
 
 logger = logging.getLogger(__name__)
 
+T = TypeVar('T')
+S = TypeVar('S')
+# TODO: think of a more pythonic way to do this, this feels off
+def consume_with_result(generator: Generator[T, Any, S]) -> Tuple[List[T], S]:
+    result: S = None
+    def _wrapper():
+        nonlocal result
+        result = yield from generator
+    iter_result = list(_wrapper())
+    assert result is not None
+    return iter_result, result
 
 def validated_bulk_query(get_search_param, ignorecase=False):
     """
@@ -95,12 +107,12 @@ def qif_response(content, download_name='transactions.qif'):
     return response
 
 
-def _dt_fallback(timestamp, use_max=False):
+def _dt_fallback(timestamp, use_max=False, default_timezone=None):
     if isinstance(timestamp, datetime.datetime):
         if timezone.is_aware(timestamp):
             return timestamp
         else:
-            return timezone.make_aware(timestamp)
+            return timezone.make_aware(timestamp, timezone=default_timezone)
 
     if use_max:
         time_pad = datetime.datetime.max.time()
@@ -110,7 +122,7 @@ def _dt_fallback(timestamp, use_max=False):
     return timezone.make_aware(
         datetime.datetime.combine(
             timestamp, time_pad
-        )
+        ), timezone=default_timezone
     )
 
 
@@ -128,8 +140,10 @@ SEARCH_PATTERN = re.compile(OGM_REGEX)
 
 
 def decimal_to_money(d, currency=None):
+    if isinstance(d, int):
+        d = Decimal(d)
     if currency is None:
-        currency = settings.BOOKKEEPING_CURRENCY
+        currency = settings.DEFAULT_CURRENCY
     return Money(
         amount=d.quantize(Decimal('.01')),
         currency=currency
@@ -151,6 +165,11 @@ def parse_ogm(ogm_str, match=None, validate=True):
         raise ValueError('Modulus of %s does not validate.' % ogm_str)
 
     return prefix, modulus
+
+
+def normalise_ogm(ogm_str, validate=True):
+    prefix, modulus = parse_ogm(ogm_str, validate=validate)
+    return ogm_from_prefix(prefix)
 
 
 def ogm_from_prefix(prefix, formatted=True):
@@ -261,7 +280,7 @@ def parse_amount(amount_str: str, raw_decimal=False):
 
     if raw_decimal:
         return rd
-    currency = settings.BOOKKEEPING_CURRENCY
+    currency = settings.DEFAULT_CURRENCY
     if rd <= 0:
         raise NegativeAmountError
     return Money(rd, currency)

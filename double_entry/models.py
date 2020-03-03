@@ -2,14 +2,13 @@ import logging
 import datetime
 from decimal import Decimal
 from collections import defaultdict, namedtuple
-from typing import Type, Tuple, cast
+from typing import Type, Tuple, cast, Optional
 
 from django.db import models
 from django.db.models import (
     F, Sum, Case, When, Subquery, OuterRef,
     Value, ExpressionWrapper,
-    Max,
-    Prefetch,
+    Max, Prefetch,
 )
 from django.db.models.functions import Coalesce
 from django.forms import ValidationError
@@ -24,10 +23,8 @@ from django.conf import settings
 from djmoney.money import Money
 
 from double_entry.utils import (
-    validated_bulk_query, _dt_fallback, make_token,
-    decimal_to_money,
-    parse_ogm,
-    ogm_from_prefix,
+    validated_bulk_query, make_token,
+    decimal_to_money, parse_ogm, ogm_from_prefix,
 )
 
 __all__ = [
@@ -103,7 +100,7 @@ class DoubleBookInterface(models.Model):
         'but attempted to match %(amount)s.'
     )
 
-    _split_manager_name = None
+    split_manager_name = None
     _split_model = None
     _remote_target_field = None
     _other_half_model = None
@@ -115,6 +112,12 @@ class DoubleBookInterface(models.Model):
     class Meta:
         abstract = True
 
+    # We cannot use __init_subclas__ since we need access to the app's model
+    #  registry, which isn't avaiable at that point
+    # TODO: figure out if we can hook into the app registry preparation to
+    #  call this method at some fixed point in the process, so we don't have
+    #  to deal with ensuring it gets called in all accessor methods
+    #  same with TransactionPartyMixin
     @classmethod
     def _prepare_split_metadata(cls):
         """
@@ -143,26 +146,29 @@ class DoubleBookInterface(models.Model):
                 set(f.related_model for f in remote_fks)
             )
             return doublebook_fk_count == doublebook_fk_model_count == 2
-           
-        candidates = [
-            f for f in cls._meta.get_fields() if is_candidate(f)
-        ]
-        if not candidates:
-            raise TypeError(
-                'There are no possible split fields on this '
-                'DoubleBookModel.'
-            )
-        elif len(candidates) > 1:
-            raise TypeError(
-                'There are too many possible split fields on this '
-                'DoubleBookModel: %s.' % (
-                    ', '.join(f.name for f in candidates)
-                )
-            )
 
-        split_rel = candidates[0]
+        if cls.split_manager_name is None:
+            candidates = [
+                f for f in cls._meta.get_fields() if is_candidate(f)
+            ]
+            if not candidates:
+                raise TypeError(
+                    'There are no possible split fields on this '
+                    'DoubleBookModel.'
+                )
+            elif len(candidates) > 1:
+                raise TypeError(
+                    'There are too many possible split fields on this '
+                    'DoubleBookModel: %s. Please set split_manager_name' % (
+                        ', '.join(f.name for f in candidates)
+                    )
+                )
+            split_rel = candidates[0]
+            cls.split_manager_name = split_rel.name
+        else:
+            split_rel = cls._meta.get_field(cls.split_manager_name)
+
         cls._split_model = split_rel.related_model
-        cls._split_manager_name = split_rel.name
         cls._remote_target_field = split_rel.remote_field.name
         
         # the is_candidate condition guarantees that this works
@@ -187,9 +193,9 @@ class DoubleBookInterface(models.Model):
     @property
     def split_manager(self):
         cls = self.__class__
-        if cls._split_manager_name is None:
+        if cls.split_manager_name is None:
             cls._prepare_split_metadata()
-        return getattr(self, cls._split_manager_name)
+        return getattr(self, cls.split_manager_name)
 
     @cached_property
     def matched_balance(self):
@@ -246,12 +252,22 @@ class DoubleBookInterface(models.Model):
             )['a']
 
     def spoof_matched_balance(self, amount):
+        if isinstance(amount, Money):
+            amount = amount.amount
         setattr(
             self, DoubleBookQuerySet.MATCHED_BALANCE_FIELD, amount
+        )
+        setattr(
+            self, DoubleBookQuerySet.UNMATCHED_BALANCE_FIELD,
+            self.total_amount.amount - amount
         )
         try:
             # invalidate cache
             del self.__dict__['matched_balance']
+        except KeyError:
+            pass
+        try:
+            del self.__dict__['unmatched_balance']
         except KeyError:
             pass
 
@@ -341,7 +357,14 @@ class DuplicationProtectionMixin(DoubleBookInterface):
         # Hence, we cannot use an exact timestamp as a cutoff point between
         # imports, which would eliminate the need for duplicate
         # checking in practice.
-        sig_kwargs['date'] = timezone.localdate(self.timestamp)
+        if settings.USE_TZ and getattr(settings, 'TRANSACTION_DUPCHECK_SERVER_TZ', False):
+            # compute transaction date in server timezone
+            date = timezone.localdate(self.timestamp)
+        else:
+            # compute transaction date in the timezone submitted with the
+            # transaction
+            date = self.timestamp.date()
+        sig_kwargs['date'] = date
         sig_kwargs['amount'] = self.total_amount.amount
         return cls.__dupcheck_signature_nt(**sig_kwargs)
 
@@ -350,9 +373,8 @@ class ConcreteAmountMixin(models.Model):
 
     total_amount = MoneyField(
         verbose_name=_('total amount'),
-        decimal_places=2,
-        max_digits=6,
-        default_currency=settings.BOOKKEEPING_CURRENCY,
+        decimal_places=getattr(settings, 'CURRENCY_DECIMAL_PLACES', 4),
+        max_digits=getattr(settings, 'CURRENCY_MAX_DIGITS', 19),
         validators=[nonzero_money_validator]
     )
 
@@ -488,25 +510,15 @@ class DuplicationProtectedQuerySet(DoubleBookQuerySet):
     model: Type[DuplicationProtectionMixin]
 
     # Prepare buckets for duplication check
-    def dupcheck_buckets(self, date_bounds=None):
+    def dupcheck_buckets(self, timestamp_bounds=None):
         if self.model.dupcheck_signature_fields is None:
-            raise TypeError(
+            raise TypeError(  # pragma: no cover
                 'Duplicate checking is not supported on this model.'
             )
         historical_buckets = defaultdict(int)
-        if date_bounds is not None:
-            # replace min/max timestamps by min/max time on the same day
-            # (in the local timezone) and filter
-            min_date, max_date = date_bounds
-            if isinstance(min_date, datetime.datetime):
-                min_date = timezone.localdate(min_date)
-            if isinstance(max_date, datetime.datetime):
-                max_date = timezone.localdate(max_date)
-            # assume that we have a raw date pair now
-            qs = self.filter(
-                timestamp__gte=_dt_fallback(min_date),
-                timestamp__lte=_dt_fallback(max_date, use_max=True)
-            )
+        if timestamp_bounds is not None:
+            min_ts, max_ts = timestamp_bounds
+            qs = self.filter(timestamp__gte=min_ts, timestamp__lte=max_ts)
         else:
             qs = self
 
@@ -636,9 +648,8 @@ class BaseTransactionSplit(models.Model):
 
     amount = MoneyField(
         verbose_name=_('amount'),
-        decimal_places=2,
-        max_digits=6,
-        default_currency=settings.BOOKKEEPING_CURRENCY,
+        decimal_places=getattr(settings, 'CURRENCY_DECIMAL_PLACES', 4),
+        max_digits=getattr(settings, 'CURRENCY_MAX_DIGITS', 19),
         validators=[nonzero_money_validator]
     )
     
@@ -665,6 +676,8 @@ class BaseTransactionSplit(models.Model):
 
 
 class BaseDebtPaymentSplit(BaseTransactionSplit):
+    strictly_enforce_timestamps = False
+
     _pmt_column_name = None
     _debt_column_name = None
 
@@ -706,34 +719,31 @@ class BaseDebtPaymentSplit(BaseTransactionSplit):
         cls = self.__class__
         payment = getattr(self, cls.get_payment_column())
         debt = getattr(self, cls.get_debt_column())
-
-        if payment.timestamp < debt.timestamp and not debt.is_refund:
-            def loctimefmt(ts):
-                return timezone.localtime(ts).strftime(
-                    '%Y-%m-%d %H:%M:%S'
-                )
+        strict = self.strictly_enforce_timestamps
+        if strict and payment.timestamp < debt.timestamp and not debt.is_refund:
             raise ValidationError(
                 _(
                     'Payment cannot be applied to future debt. '
                     'Payment is dated %(payment_ts)s, while '
                     'debt is dated %(debt_ts)s.'
                 ) % {
-                    'payment_ts': loctimefmt(payment.timestamp),
-                    'debt_ts': loctimefmt(debt.timestamp)
+                    'payment_ts': payment.timestamp.isoformat(),
+                    'debt_ts': debt.timestamp.isoformat()
                 }
             )
 
 NINE_DIGIT_MODPAIR = (783142319, 289747279)
 
-def parse_transaction_no(ogm, prefix_digit, match=None):
+def parse_transaction_no(ogm, prefix_digit: Optional[int]=None, match=None):
     prefix, _ = parse_ogm(ogm, match)
 
     prefix_str = str(prefix)
-    if prefix_str[0] != prefix_digit:
-        raise ValueError()
+    rd_prefix_digit = int(prefix_str[0])
+    if prefix_digit is not None and rd_prefix_digit != prefix_digit:
+        raise ValueError
     unpack = (int(prefix_str[1:]) * NINE_DIGIT_MODPAIR[1]) % 10**9
     # ignore token digest, it already served its purpose
-    return unpack // 100
+    return rd_prefix_digit, unpack // 100
 
 class TransactionPartyQuerySet(models.QuerySet):
     model: 'TransactionPartyMixin'
@@ -741,8 +751,8 @@ class TransactionPartyQuerySet(models.QuerySet):
 
     def by_payment_tracking_no(self, ogm):
         try:
-            pk = parse_transaction_no(
-                ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
+            prefix_digit, pk = parse_transaction_no(
+                ogm, prefix_digit=self.model.payment_tracking_prefix
             )
         except ValueError:
             raise self.model.DoesNotExist()
@@ -754,8 +764,8 @@ class TransactionPartyQuerySet(models.QuerySet):
             for ogm in ogms:
                 try:
                     yield parse_transaction_no(
-                        ogm, prefix_digit=self.model.PAYMENT_TRACKING_PREFIX
-                    )
+                        ogm, prefix_digit=self.model.payment_tracking_prefix
+                    )[1]
                 except ValueError:
                     continue
 
@@ -769,7 +779,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # this does NOT compute the debt balance/member annotation
         return self.prefetch_related(
             Prefetch(
-                self.model.DEBTS_RELATION,
+                self.model.get_debts_manager_name(),
                 queryset=self.model.get_debt_model().objects.with_payments()
             )
         )
@@ -778,7 +788,7 @@ class TransactionPartyQuerySet(models.QuerySet):
         # annotate payments relation (for symmetry)
         return self.prefetch_related(
             Prefetch(
-                self.model.PAYMENTS_RELATION,
+                self.model.get_payments_manager_name(),
                 queryset=self.model.get_payment_model().objects.with_debts()
             )
         )
@@ -828,12 +838,12 @@ class TransactionPartyQuerySet(models.QuerySet):
 #  through reflection
 class TransactionPartyMixin(models.Model):
 
-    PAYMENT_TRACKING_PREFIX = None
-    DEBTS_RELATION = 'debts'
-    PAYMENTS_RELATION = 'payments'
+    payment_tracking_prefix: int = None
     _debt_model: Type[BaseDebtRecord] = None
     _payment_model: Type[BasePaymentRecord] = None
     _split_model: Type[BaseDebtPaymentSplit] = None
+    _debts_manager_name: str = None
+    _payments_manager_name: str = None
     _debt_remote_fk: str = None
     _payment_remote_fk: str = None
     _debt_remote_fk_column: str = None
@@ -851,6 +861,8 @@ class TransactionPartyMixin(models.Model):
         default=make_token
     )
 
+    objects = TransactionPartyQuerySet.as_manager()
+
     class Meta:
         abstract = True
 
@@ -858,8 +870,48 @@ class TransactionPartyMixin(models.Model):
     def _annotate_model_metadata(cls):
         if cls._debt_model is not None:
             return
-        debts_f = cls._meta.get_field(cls.DEBTS_RELATION)
-        payments_f = cls._meta.get_field(cls.PAYMENTS_RELATION)
+
+        fields = cls._meta.get_fields()
+        m2one_fields = [f for f in fields if isinstance(f, ManyToOneRel)]
+        m2one_models = set(f.remote_field.model for f in m2one_fields)
+        def is_candidate(field, *, is_payment: bool):
+            base_class = BasePaymentRecord if is_payment else BaseDebtRecord
+            remote_model = field.remote_field.model
+            if not issubclass(remote_model, base_class):
+                return False
+            other_half = remote_model.get_other_half_model()
+            return other_half in m2one_models
+
+        if cls._debts_manager_name is None:
+            debt_fields = [
+                f for f in m2one_fields if is_candidate(f, is_payment=False)
+            ]
+            if not debt_fields:
+                raise TypeError('No candidate for debts relation')
+            elif len(debt_fields) > 1:
+                raise TypeError(
+                    'Too many candidates for debts relation. '
+                    'Please set debts_manager_name'
+                )
+            debts_f = debt_fields[0]
+            cls._debts_manager_name = debts_f.name
+        else:
+            debts_f = cls._meta.get_field(cls._debts_manager_name)
+        if cls._payments_manager_name is None:
+            payment_fields = [
+                f for f in m2one_fields if is_candidate(f, is_payment=True)
+            ]
+            if not payment_fields:
+                raise TypeError('No candidate for payments relation')
+            elif len(payment_fields) > 1:
+                raise TypeError(
+                    'Too many candidates for payments relation. '
+                    'Please set payments_manager_name'
+                )
+            payments_f = payment_fields[0]
+            cls._payments_manager_name = payments_f.name
+        else:
+            payments_f = cls._meta.get_field(cls._payments_manager_name)
         cls._debt_model = debts_f.related_model
         cls._payment_model = payments_f.related_model
         if not issubclass(cls._debt_model, BaseDebtRecord):
@@ -881,6 +933,16 @@ class TransactionPartyMixin(models.Model):
                 'Payment and debt ledger classes are inconsistent.'
             )
         cls._split_model = cls._debt_model.get_split_model()[0]
+
+    @classmethod
+    def get_debts_manager_name(cls):
+        cls._annotate_model_metadata()
+        return cls._debts_manager_name
+
+    @classmethod
+    def get_payments_manager_name(cls):
+        cls._annotate_model_metadata()
+        return cls._payments_manager_name
 
     @classmethod
     def get_debt_model(cls):
@@ -919,18 +981,19 @@ class TransactionPartyMixin(models.Model):
 
     @classmethod
     def parse_transaction_no(cls, ogm):
-        return parse_transaction_no(ogm, cls.PAYMENT_TRACKING_PREFIX)
+        return parse_transaction_no(ogm, cls.payment_tracking_prefix)[1]
 
     def _payment_tracking_no(self, formatted):
+        type_prefix = self.__class__.payment_tracking_prefix
+        if type_prefix is None:
+            raise TypeError(
+                'Payment tracking prefix not set'
+            )
         # memoryview weirdness forces this
         token_seed = bytes(self.hidden_token)[1]
-        raw = int('%07d%02d' % (
-            self.pk % 10 ** 7,
-            token_seed % 100,
-        )
-                  )
+        raw = int('%07d%02d' % (self.pk % 10 ** 7, token_seed % 100))
         obf = (raw * NINE_DIGIT_MODPAIR[0]) % 10**9
-        prefix_str = '%s%09d' % (self.__class__.PAYMENT_TRACKING_PREFIX, obf)
+        prefix_str = '%s%09d' % (type_prefix, obf)
         return ogm_from_prefix(prefix_str, formatted)
 
     @cached_property
@@ -952,9 +1015,10 @@ class TransactionPartyMixin(models.Model):
             # with_debt_annotations, otherwise RIP DB
             # TODO: can we detect prefetched relations easily?
             cls = self.__class__
+            # TODO: can we do better than falling back on settings.DEFAULT_CURRENCY?
             return sum(
-                (d.balance for d in getattr(self, cls.DEBTS_RELATION).all()),
-                Money(0, settings.BOOKKEEPING_CURRENCY)
+                (d.balance for d in getattr(self, cls.get_debts_manager_name()).all()),
+                Money(0, settings.DEFAULT_CURRENCY)
             )
 
     @cached_property
@@ -962,8 +1026,8 @@ class TransactionPartyMixin(models.Model):
         # see above
         cls = self.__class__
         return sum(
-            (d.amount_paid for d in getattr(self, cls.DEBTS_RELATION).all()),
-            Money(0, settings.BOOKKEEPING_CURRENCY)
+            (d.amount_paid for d in getattr(self, cls.get_debts_manager_name()).all()),
+            Money(0, settings.DEFAULT_CURRENCY)
         )
 
     @cached_property
@@ -971,8 +1035,8 @@ class TransactionPartyMixin(models.Model):
         # this one needs with_payment_annotations to be efficient
         cls = self.__class__
         return sum(
-            (d.total_amount for d in getattr(self, cls.PAYMENTS_RELATION).all()),
-            Money(0, settings.BOOKKEEPING_CURRENCY)
+            (d.total_amount for d in getattr(self, cls.get_payments_manager_name()).all()),
+            Money(0, settings.DEFAULT_CURRENCY)
         )
 
     @cached_property

@@ -1,0 +1,41 @@
+{% load i18n static %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Review transactions</title>
+    <script src="https://code.jquery.com/jquery-3.4.1.min.js"
+			  integrity="sha256-CSXorXvZcTkaix6Yvo6HppcZGetbYMGWSFlBw8HfCJo="
+			  crossorigin="anonymous"></script>
+    <script lang="text/javascript" src="{% static 'js/submit-transactions.js' %}"></script>
+    <script lang="text/javascript">
+        const transactionsInitial = {{ transaction_initial_data|safe }};
+
+        function errh(event, response, ajaxSettings, errorThrown) {
+            let {responseJSON: { api_error }} = response;
+            window.alert("{% trans 'API Error: ' %}" + api_error);
+        }
+        $(document).ready(function () {
+            $(document).ajaxError(errh);
+            const endpointUrl = '{{ endpoint_url }}';
+            const pipelineSectionCount = {{ section_count }};
+            const pipelineSectionIdPrefix = "{{ pipeline_section_id_prefix|default:'pipeline-section' }}";
+            {# this is a horrible hack, but javascript doesn't have range() #}
+            const pipelineSectionTables = [...new Array(pipelineSectionCount).keys()].map(
+                k => `${pipelineSectionIdPrefix}-${k}`
+            );
+            // format error data
+            $.map(transactionsInitial, (resp => processResponse(resp)));
+            $('#submit-transactions').click(function (){
+                submitTransactions(endpointUrl, pipelineSectionTables, true);
+            });
+        });
+    </script>
+</head>
+<body>
+    {% csrf_token %}
+    {% for pipeline_section, resolved_list in resolved_by_section %}
+        {% include 'transaction_upload/result_tables.html' %}
+    {% endfor %}
+    <button id="submit-transactions">Submit transactions</button>
+</body>
+</html>

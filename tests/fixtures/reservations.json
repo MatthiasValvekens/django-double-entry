@@ -1,0 +1,414 @@
+[ 
+{
+    "model": "tests.ticketcategory",
+    "pk": 1,
+    "fields": {
+        "price_currency": "EUR",
+        "price": "4.00"
+    }
+},
+{
+    "model": "tests.ticketcategory",
+    "pk": 2,
+    "fields": {
+        "price_currency": "EUR",
+        "price": "10.00"
+    }
+},
+{
+    "model": "tests.event",
+    "pk": 1,
+    "fields": {
+        "name": "blah",
+        "start": "2019-10-27T12:16:03.738Z"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 1,
+    "fields": {
+        "hidden_token": "FpT0S901p7U=",
+        "name": "Asp\u00e9n Robbins"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 2,
+    "fields": {
+        "hidden_token": "wF8KNzEjxi0=",
+        "name": "Isabelle Mccall"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 3,
+    "fields": {
+        "hidden_token": "LSXgQcr5H/I=",
+        "name": "Kellie Wiggins"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 4,
+    "fields": {
+        "hidden_token": "I4NZjWvSMWw=",
+        "name": "Ignatius Nelson"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 5,
+    "fields": {
+        "hidden_token": "MLxmuiXWwms=",
+        "name": "Portia Singleton"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 5,
+    "fields": {
+        "hidden_token": "NWeg9ATwJto=",
+        "name": "Keiko Ray"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 6,
+    "fields": {
+        "hidden_token": "pLzx3nI4uJk=",
+        "name": "Benedict Petersen"
+    }
+},
+{
+    "model": "tests.ticketcustomer",
+    "pk": 7,
+    "fields": {
+        "hidden_token": "dyN/kRTxiOc=",
+        "name": "Benedict Petersen"
+    }
+},
+  {
+    "model": "tests.reservationdebt",
+    "pk": 1,
+    "fields": {
+      "owner_id": 1,
+      "timestamp": "2019-08-08T00:30:00+01:00"
+    }
+  },
+  {
+    "model": "tests.reservation",
+    "pk": 1,
+    "fields": {
+      "event_id": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 1,
+      "category_id": 1,
+      "count": 3
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 1,
+      "category_id": 2,
+      "count": 2
+    }
+  },
+  {
+    "model": "tests.reservationdebt",
+    "pk": 2,
+    "fields": {
+      "owner_id": 2,
+      "timestamp": "2019-08-08T00:30:00+01:00"
+    }
+  },
+  {
+    "model": "tests.reservation",
+    "pk": 2,
+    "fields": {
+      "event_id": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 2,
+      "category_id": 1,
+      "count": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 2,
+      "category_id": 2,
+      "count": 2
+    }
+  },
+  {
+    "model": "tests.reservationpayment",
+    "pk": 2,
+    "fields": {
+      "total_amount": "24.00",
+      "total_amount_currency": "EUR",
+      "customer_id": 2,
+      "timestamp": "2019-08-08T00:15:00+00:00"
+    }
+  },
+  {
+    "model": "tests.reservationpaymentsplit",
+    "fields": {
+      "payment_id": 2,
+      "reservation_id": 2,
+      "amount": "24.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.reservationdebt",
+    "pk": 3,
+    "fields": {
+      "owner_id": 7,
+      "static_price": "7.00",
+      "timestamp": "2019-08-08T00:30:00+01:00"
+    }
+  },
+  {
+    "model": "tests.reservation",
+    "pk": 3,
+    "fields": {
+      "event_id": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 3,
+      "category_id": 1,
+      "count": 3
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 3,
+      "category_id": 2,
+      "count": 2
+    }
+  },
+  {
+    "model": "tests.reservationpayment",
+    "pk": 3,
+    "fields": {
+      "total_amount": "7.00",
+      "total_amount_currency": "EUR",
+      "customer_id": 7,
+      "timestamp": "2019-08-08T00:15:00+00:00"
+    }
+  },
+  {
+    "model": "tests.reservationpaymentsplit",
+    "fields": {
+      "payment_id": 3,
+      "reservation_id": 3,
+      "amount": "7.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.reservationdebt",
+    "pk": 4,
+    "fields": {
+      "owner_id": 5,
+      "timestamp": "2019-08-08T00:30:00+01:00"
+    }
+  },
+  {
+    "model": "tests.reservation",
+    "pk": 4,
+    "fields": {
+      "event_id": 1
+    }
+  },
+  {
+    "model": "tests.reservationdebt",
+    "pk": 5,
+    "fields": {
+      "owner_id": 5,
+      "timestamp": "2019-08-08T00:30:00+01:00"
+    }
+  },
+  {
+    "model": "tests.reservation",
+    "pk": 5,
+    "fields": {
+      "event_id": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 5,
+      "category_id": 1,
+      "count": 3
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 4,
+      "category_id": 1,
+      "count": 10
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 4,
+      "category_id": 2,
+      "count": 2
+    }
+  },
+  {
+    "model": "tests.reservationpayment",
+    "pk": 4,
+    "fields": {
+      "total_amount": "44.00",
+      "total_amount_currency": "EUR",
+      "customer_id": 5,
+      "timestamp": "2019-08-08T00:15:00+00:00"
+    }
+  },
+  {
+    "model": "tests.reservationpaymentsplit",
+    "fields": {
+      "payment_id": 4,
+      "reservation_id": 4,
+      "amount": "32.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.reservationpaymentsplit",
+    "fields": {
+      "payment_id": 4,
+      "reservation_id": 5,
+      "amount": "12.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.reservationpayment",
+    "pk": 5,
+    "fields": {
+      "total_amount": "18.00",
+      "total_amount_currency": "EUR",
+      "customer_id": 5,
+      "timestamp": "2019-08-08T00:15:00+00:00"
+    }
+  },
+  {
+    "model": "tests.reservationpaymentsplit",
+    "fields": {
+      "payment_id": 5,
+      "reservation_id": 4,
+      "amount": "18.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.reservationdebt",
+    "pk": 6,
+    "fields": {
+      "owner_id": 4,
+      "timestamp": "2019-08-08T00:30:00+01:00"
+    }
+  },
+  {
+    "model": "tests.reservation",
+    "pk": 6,
+    "fields": {
+      "event_id": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 6,
+      "category_id": 1,
+      "count": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 6,
+      "category_id": 2,
+      "count": 2
+    }
+  },
+  {
+    "model": "tests.reservationpayment",
+    "pk": 6,
+    "fields": {
+      "total_amount": "30.00",
+      "total_amount_currency": "EUR",
+      "customer_id": 4,
+      "timestamp": "2019-08-08T00:15:00+00:00"
+    }
+  },
+  {
+    "model": "tests.reservationpaymentsplit",
+    "fields": {
+      "payment_id": 6,
+      "reservation_id": 6,
+      "amount": "24.00",
+      "amount_currency": "EUR"
+    }
+  },
+  {
+    "model": "tests.reservation",
+    "pk": 7,
+    "fields": {
+      "event_id": 1
+    }
+  },
+  {
+    "model": "tests.ticket",
+    "fields": {
+      "reservation_id": 7,
+      "category_id": 2,
+      "count": 3
+    }
+  },
+  {
+    "model": "tests.reservationdebt",
+    "pk": 7,
+    "fields": {
+      "owner_id": 4,
+      "timestamp": "2019-08-08T00:30:00+01:00"
+    }
+  },
+  {
+    "model": "tests.reservationpayment",
+    "pk": 7,
+    "fields": {
+      "total_amount": "24.00",
+      "total_amount_currency": "EUR",
+      "customer_id": 4
+    }
+  },
+  {
+    "model": "tests.reservationpaymentsplit",
+    "fields": {
+      "payment_id": 7,
+      "reservation_id": 7,
+      "amount": "24.00",
+      "amount_currency": "EUR"
+    }
+  }
+]

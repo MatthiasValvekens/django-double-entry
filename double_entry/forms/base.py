@@ -88,7 +88,7 @@ class InlineTransactionSplitFormSet(forms.BaseInlineFormSet):
 
         split_total = sum(
             split_amounts(),
-            Money(Decimal('0'), settings.BOOKKEEPING_CURRENCY)
+            Money(Decimal('0'), settings.DEFAULT_CURRENCY)
         )
 
         if split_total > max_total:
