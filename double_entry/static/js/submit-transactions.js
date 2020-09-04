@@ -1,9 +1,9 @@
 function collectTransactions(elementId) {
     let collection = $(`#${elementId}`);
     let pipelineSectionId = collection.attr('data-pipeline-section-id');
-    let to_commit = $(`#${elementId} .resolved-transaction`).filter('[data-commit]');
+    let to_commit = $(`#${elementId} .resolved-transaction`);
     return to_commit.map(function() {
-        let feedback = this.find('.transaction-feedback')[0];
+        let feedback = this.querySelector('.transaction-feedback');
         if(!feedback.dataset.commit) {
             return null;
         }
@@ -54,7 +54,7 @@ function processResponse({transaction_id, errors, warnings, verdict, committed=f
     let element = $(`#${transaction_id}`);
     let elementFeedback = element.find('.transaction-feedback')[0];
     // nonzero verdict and there was intent to commit => server rejected the transaction
-    if(committed || (commitIntention && verdict > 0)) {
+    if(commitIntention && (committed || verdict > 0)) {
         // remove item from view, no longer relevant
         element.remove();
         return;
@@ -92,7 +92,7 @@ function submitTransactions(endpointUrl, elementIds, commit=true, responseCallba
         data: JSON.stringify(postData)
     }).done(function (response) {
         let {pipeline_responses} = response;
-        pipeline_responses.forEach(resp => responseCallback(resp, true));
+        pipeline_responses.forEach(resp => responseCallback(resp, commit));
         if(extraCallback !== null) {
             extraCallback(response);
         }

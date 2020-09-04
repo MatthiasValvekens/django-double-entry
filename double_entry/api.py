@@ -184,6 +184,11 @@ class PaymentPipelineAPIEndpoint(api_utils.APIEndpoint, abstract=True):
             'verdict': message_context.verdict,
         }
         if include_commit:
+            # FIXME In retrospect this is a bit of a misnomer, since
+            #  calling the API in no-commit mode obviously makes it so
+            #  that transactions are never saved to the DB.
+            #  Also calling this one 'to_commit' would have made more sense.
+            #  Need to document this properly!
             res['committed'] = transaction.to_commit
         return res
 
