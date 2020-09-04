@@ -1,7 +1,7 @@
 function collectTransactions(elementId) {
     let collection = $(`#${elementId}`);
     let pipelineSectionId = collection.attr('data-pipeline-section-id');
-    let to_commit = $(`#${elementId} .resolved-transaction`).filter('[data-commit="true"]');
+    let to_commit = $(`#${elementId} .resolved-transaction`).filter('[data-commit]');
     return to_commit.map(function() {
         let feedback = this.find('.transaction-feedback')[0];
         if(!feedback.dataset.commit) {
@@ -27,6 +27,27 @@ function collectTransactions(elementId) {
         }
         return row_data;
     }).get();
+}
+
+function markForCommit(feedbackElement, commit) {
+    /**
+     * Marks or unmarks a transaction for committing (if possible), and returns the resulting
+     * status of the commit flag.
+     */
+    let verdict = feedbackElement.dataset.verdict;
+
+    // if the server already rejected this transaction permanently, or if
+    // this function is somehow called before we hear back from the server, don't
+    // do anything
+    if(typeof verdict === typeof undefined || verdict === 'discard')
+        return false;
+    else if(commit) {
+        feedbackElement.dataset.commit = "true";
+        return true;
+    } else {
+        delete feedbackElement.dataset.commit;
+        return false;
+    }
 }
 
 function processResponse({transaction_id, errors, warnings, verdict, committed=false}, commitIntention=false) {

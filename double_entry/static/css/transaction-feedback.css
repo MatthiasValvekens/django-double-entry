@@ -8,8 +8,9 @@
     background: rgba(0, 122, 0, 0.1);
 }
 
-.transaction-feedback {
+td.transaction-feedback {
     position: relative;
+    padding-top: 2rem;
 }
 
 .transaction-feedback::after {
