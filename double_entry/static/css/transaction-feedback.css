@@ -1,23 +1,38 @@
 /* Example CSS styling for transaction feedback, based on Fontawesome */
 
-.transaction-feedback[data-verdict="commit"] .verdict-feedback::before {
-    content: "\f00c";  /* check */
-    font-family: "FontAwesome";
-    color: #007a00;
-    font-weight: 900;
+.transaction-feedback:not([data-commit]) {
+    background: rgba(184, 29, 43, 0.1);
 }
 
-.transaction-feedback[data-verdict="discard"] .verdict-feedback::before {
-    content: "\f00d"; /* times */
-    font-family: "FontAwesome";
-    color: #b81d2b;
-    font-weight: 900;
+.transaction-feedback[data-commit] {
+    background: rgba(0, 122, 0, 0.1);
 }
-.transaction-feedback[data-verdict="suggest-skip"] .verdict-feedback::before {
-    content: "\f071"; /* exclamation-triangle */
+
+.transaction-feedback {
+    position: relative;
+}
+
+.transaction-feedback::after {
+    position: absolute;
     font-family: "FontAwesome";
-    color: #e0c32d;
+    top: 0;
+    right: 0;
     font-weight: 900;
+    padding-right: 0.2rem;
+}
+
+.transaction-feedback[data-verdict="commit"]::after {
+    content: "\f00c";  /* check */
+    color: #007a00;
+}
+
+.transaction-feedback[data-verdict="discard"]::after {
+    content: "\f00d"; /* times */
+    color: #b81d2b;
+}
+.transaction-feedback[data-verdict="suggest-skip"]::after {
+    content: "\f071"; /* exclamation-triangle */
+    color: #e0c32d;
 }
 
 

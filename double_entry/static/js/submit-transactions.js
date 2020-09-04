@@ -54,14 +54,12 @@ function processResponse({transaction_id, errors, warnings, verdict, committed=f
             break;
     }
 
-    let verdictFeedback = '<span class="verdict-feedback"></span><br/>'
-    let errorFeedback = "";
+    let feedback = "";
     if(errors.length)
-        errorFeedback = `<ul class="transaction-errors">${errors.map(err => `<li>${err}</li>`).concat()}</ul>`;
-    let warningFeedback = "";
+        feedback = `<ul class="transaction-errors">${errors.map(err => `<li>${err}</li>`).concat()}</ul><br/>`;
     if(warnings.length)
-        warningFeedback = `<br/><ul class="transaction-warnings">${warnings.map(err => `<li>${err}</li>`).concat()}</ul>`;
-    elementFeedback.innerHTML = verdictFeedback + errorFeedback + warningFeedback;
+        feedback += `<ul class="transaction-warnings">${warnings.map(err => `<li>${err}</li>`).concat()}</ul>`;
+    elementFeedback.innerHTML = feedback;
 }
 
 function submitTransactions(endpointUrl, elementIds, commit=true, responseCallback=processResponse, extraCallback=null) {
