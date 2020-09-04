@@ -1,7 +1,12 @@
 function collectTransactions(elementId) {
     let collection = $(`#${elementId}`);
     let pipelineSectionId = collection.attr('data-pipeline-section-id');
-    return $(`#${elementId} .resolved-transaction`).map(function() {
+    let to_commit = $(`#${elementId} .resolved-transaction`).filter('[data-commit="true"]');
+    return to_commit.map(function() {
+        let feedback = this.find('.transaction-feedback')[0];
+        if(!feedback.dataset.commit) {
+            return null;
+        }
         let row_id = this.id;
         let row_data = { transaction_id: row_id };
         // if undefined, we assume that it isn't necessary
@@ -14,45 +19,49 @@ function collectTransactions(elementId) {
                 row_data[parameterName] = attr.value;
             }
         });
+        if(feedback.dataset.verdict !== 'commit') {
+            // This means that the user explicitly asked for this transaction to be committed, even though
+            // the server already gave a warning. Hence, we now have to tell the server that non-fatal
+            // problems with this entry are to be ignored.
+            row_data.do_not_skip = true;
+        }
         return row_data;
     }).get();
 }
 
 function processResponse({transaction_id, errors, warnings, verdict, committed=false}, commitIntention=false) {
-    // TODO when we add proper support for skipping, this should be changed
-    //  since a do_not_skip request with this response would warrant review
-    if(committed || (commitIntention && verdict === 1)) {
+    let element = $(`#${transaction_id}`);
+    let elementFeedback = element.find('.transaction-feedback')[0];
+    // nonzero verdict and there was intent to commit => server rejected the transaction
+    if(committed || (commitIntention && verdict > 0)) {
         // remove item from view, no longer relevant
-        $(`#${transaction_id}`).remove();
+        element.remove();
         return;
     }
     // update with feedback from api
-    let successFeedback = "";
-    let verdict_class;
     switch(verdict) {
         case 0:
-            successFeedback = '<span class="fas fa-check text-success"></span>';
-            verdict_class = 'verdict-commit';
+            elementFeedback.dataset.verdict = 'commit';
+            elementFeedback.dataset.commit = 'true';
             break;
         case 1:
-            verdict_class = 'verdict-suggest-skip';
+            elementFeedback.dataset.verdict = 'suggest-skip';
+            delete elementFeedback.dataset.commit;
             break;
         case 3:
-            verdict_class = 'verdict-discard';
+            elementFeedback.dataset.verdict = 'discard';
+            delete elementFeedback.dataset.commit;
             break;
     }
 
-    // TODO: make this look nice
+    let verdictFeedback = '<span class="verdict-feedback"></span><br/>'
     let errorFeedback = "";
-    if(errors)
+    if(errors.length)
         errorFeedback = `<ul class="transaction-errors">${errors.map(err => `<li>${err}</li>`).concat()}</ul>`;
     let warningFeedback = "";
-    if(warnings)
-        warningFeedback = `<ul class="transaction-warnings">${warnings.map(err => `<li>${err}</li>`).concat()}</ul>`;
-    let element = $(`#${transaction_id} > .transaction-feedback`);
-    element.addClass(verdict_class);
-    let feedback_html = [successFeedback,warningFeedback,errorFeedback].join('<br/>');
-    element.html(feedback_html);
+    if(warnings.length)
+        warningFeedback = `<br/><ul class="transaction-warnings">${warnings.map(err => `<li>${err}</li>`).concat()}</ul>`;
+    elementFeedback.innerHTML = verdictFeedback + errorFeedback + warningFeedback;
 }
 
 function submitTransactions(endpointUrl, elementIds, commit=true, responseCallback=processResponse, extraCallback=null) {

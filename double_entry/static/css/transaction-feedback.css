@@ -1,0 +1,38 @@
+/* Example CSS styling for transaction feedback, based on Fontawesome */
+
+.transaction-feedback[data-verdict="commit"] .verdict-feedback::before {
+    content: "\f00c";  /* check */
+    font-family: "FontAwesome";
+    color: #007a00;
+    font-weight: 900;
+}
+
+.transaction-feedback[data-verdict="discard"] .verdict-feedback::before {
+    content: "\f00d"; /* times */
+    font-family: "FontAwesome";
+    color: #b81d2b;
+    font-weight: 900;
+}
+.transaction-feedback[data-verdict="suggest-skip"] .verdict-feedback::before {
+    content: "\f071"; /* exclamation-triangle */
+    font-family: "FontAwesome";
+    color: #e0c32d;
+    font-weight: 900;
+}
+
+
+.transaction-feedback ul {
+    list-style-type: none;
+    padding-left: 1.2em;
+}
+
+.transaction-feedback li::before {
+    content: "\f06a"; /* exclamation-circle */
+    font-family: "FontAwesome";
+    margin:0 0.4em 0 -1.2em;
+    color: #7a7a7a;
+}
+
+.transaction-feedback > .transaction-errors {
+    font-weight: bold;
+}
