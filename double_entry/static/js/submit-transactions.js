@@ -83,18 +83,15 @@ function processResponse({transaction_id, errors, warnings, verdict, committed=f
     elementFeedback.innerHTML = feedback;
 }
 
-function submitTransactions(endpointUrl, elementIds, commit=true, responseCallback=processResponse, extraCallback=null) {
+function submitTransactions(endpointUrl, elementIds, commit=true, responseCallback=processResponse) {
     let transactionLists = elementIds.map(collectTransactions);
     let transactions = [].concat.apply([], transactionLists);
     let postData = { commit: commit, transactions: transactions };
-    $.ajax({
+    return $.ajax({
         url: endpointUrl, method: "post", dataType: "json",
         data: JSON.stringify(postData)
     }).done(function (response) {
         let {pipeline_responses} = response;
         pipeline_responses.forEach(resp => responseCallback(resp, commit));
-        if(extraCallback !== null) {
-            extraCallback(response);
-        }
     });
 }
