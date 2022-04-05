@@ -382,7 +382,7 @@ class ConcreteAmountMixin(models.Model):
         abstract = True
 
     def clean(self): 
-        if self.total_amount.amount < 0:
+        if self.total_amount is not None and self.total_amount.amount < 0:
             raise ValidationError(
                 _('Ledger entry amount is negative: %(amount)s') % {
                     'amount': self.total_amount
