@@ -118,7 +118,7 @@ class TestSimplePreparator(TestCase):
         prep.exact_amount_match_only = True
         prep.review()
         self.assertEqual(len(error_context.transaction_warnings), 1)
-        self.assertTrue('only 0.00' in error_context.transaction_warnings[0])
+        self.assertTrue('only €0.00' in error_context.transaction_warnings[0])
         self.assertEqual(len(prep.valid_transactions), 1)
         pt, = prep.valid_transactions
         le: models.SimpleCustomerPayment = pt.ledger_entry
@@ -175,7 +175,7 @@ class TestSimplePreparator(TestCase):
         )
         prep.review()
         self.assertEqual(len(error_context.transaction_warnings), 1)
-        self.assertTrue('only 32.00' in error_context.transaction_warnings[0])
+        self.assertTrue('only €32.00' in error_context.transaction_warnings[0])
         self.assertEqual(len(error_context.transaction_errors), 0)
         self.assertEqual(len(prep.valid_transactions), 1)
         pt, = prep.valid_transactions
@@ -461,7 +461,7 @@ class TestReservationPreparator(TestCase):
         )
         prep.review()
         self.assertEqual(len(error_context.transaction_warnings), 1)
-        self.assertTrue('only 32.00' in error_context.transaction_warnings[0])
+        self.assertTrue('only €32.00' in error_context.transaction_warnings[0])
         self.assertEqual(len(error_context.transaction_errors), 0)
         self.assertEqual(len(prep.valid_transactions), 1)
         pt, = prep.valid_transactions
