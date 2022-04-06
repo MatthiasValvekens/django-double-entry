@@ -5,7 +5,7 @@ import pytz
 from django.test import TestCase
 from djmoney.money import Money
 
-from tests import models
+from double_entry.tests import models
 
 FIXTURE_EVENT_PK = 1
 FIXTURE_UNPAID_PK = 1

@@ -9,7 +9,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.contenttypes',
     'django.contrib.staticfiles',
-    'double_entry', 'tests',
+    'double_entry', 'double_entry.tests',
 ]
 
 DATABASES = {
@@ -18,7 +18,7 @@ DATABASES = {
     }
 }
 
-ROOT_URLCONF = 'tests.urls'
+ROOT_URLCONF = 'double_entry.tests.urls'
 
 TEMPLATES = [{
     'BACKEND': 'django.template.backends.django.DjangoTemplates',

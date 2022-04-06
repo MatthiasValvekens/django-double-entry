@@ -1,6 +1,7 @@
 from django.test import TestCase
 
-from tests import models
+from double_entry.tests import models
+
 
 class TestSimpleMagic(TestCase):
 
