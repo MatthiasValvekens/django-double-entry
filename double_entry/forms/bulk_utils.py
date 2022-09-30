@@ -54,8 +54,8 @@ from django.conf import settings
 from django.db.models import ForeignKey, QuerySet
 from django.utils import timezone
 from django.utils.translation import (
-    ugettext_lazy as _,
-    ugettext,
+    gettext_lazy as _,
+    gettext,
 )
 from djmoney.money import Money
 
@@ -499,7 +499,7 @@ class LedgerEntryPreparator(Generic[LE, TP, RT]):
         if transaction.amount.amount < 0:
             err: ResolvedTransactionMessageContext = transaction.message_context
             err.error(
-                ugettext('Payment amount %(amount)s is negative.'), {
+                gettext('Payment amount %(amount)s is negative.'), {
                     'amount': transaction.amount
                 }
             )
@@ -889,7 +889,7 @@ class CreditApportionmentMixin(LedgerEntryPreparator[PLE, TP, RT]):
 
     @property
     def overpayment_fmt_string(self):
-        return ugettext(
+        return gettext(
             'Received %(total_credit)s, but only %(total_used)s '
             'can be applied to outstanding debts. '
             'Payment(s) dated %(payment_dates)s have outstanding '
@@ -1183,7 +1183,7 @@ class PaymentSubmissionPipeline:
                     yield account, rt
                 except KeyError:
                     rt.message_context.error(
-                        ugettext('Account with id \'%(pk)d\' not found'),
+                        gettext('Account with id \'%(pk)d\' not found'),
                         params={'pk': rt.transaction_party_id}
                     )
 

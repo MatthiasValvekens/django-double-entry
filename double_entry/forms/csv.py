@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Optional, TypeVar, Generic, ClassVar, Type, Tuple
 
 from django.utils import timezone
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from djmoney.money import Money
 
 from double_entry.utils import (
@@ -96,7 +96,7 @@ class FinancialCSVParser(Generic[TI]):
         try:
             self._objects = list(gen())
         except KeyError as e:
-            from django.utils.translation import ugettext as _
+            from django.utils.translation import gettext as _
             self.error(
                 0, _('Missing column: %(col)s. No data processed.') % {
                     'col': e.args[0]

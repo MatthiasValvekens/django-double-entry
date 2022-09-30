@@ -6,7 +6,7 @@ from django import forms
 from django.core.exceptions import ValidationError
 from django.forms.models import ModelForm
 from django.utils.deconstruct import deconstructible
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from .. import models
 from double_entry.forms.widgets import DatalistInputWidget
