@@ -15,7 +15,7 @@ from django.forms import ValidationError
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import (
-    ugettext_lazy as _, pgettext_lazy,
+    gettext_lazy as _, pgettext_lazy,
 )
 from djmoney.models.fields import MoneyField
 from django.db.models.fields.reverse_related import ManyToOneRel
