@@ -22,7 +22,7 @@ PIPELINE_SIMPLE_SECTION = 0
 PIPELINE_TICKET_SECTION = 1
 
 
-# TODO: figure out a way to create skippable tests for the postgres only stuff
+# TODO: figure out a way to create skippable de_tests for the postgres only stuff
 # TODO: test these with queryset sealing
 # noinspection DuplicatedCode
 class TestSimplePreparator(TestCase):
@@ -118,7 +118,10 @@ class TestSimplePreparator(TestCase):
         prep.exact_amount_match_only = True
         prep.review()
         self.assertEqual(len(error_context.transaction_warnings), 1)
-        self.assertTrue('only €0.00' in error_context.transaction_warnings[0])
+        self.assertTrue(
+            'only €0.00' in error_context.transaction_warnings[0],
+            msg=error_context.transaction_warnings[0]
+        )
         self.assertEqual(len(prep.valid_transactions), 1)
         pt, = prep.valid_transactions
         le: models.SimpleCustomerPayment = pt.ledger_entry
@@ -175,7 +178,10 @@ class TestSimplePreparator(TestCase):
         )
         prep.review()
         self.assertEqual(len(error_context.transaction_warnings), 1)
-        self.assertTrue('only €32.00' in error_context.transaction_warnings[0])
+        self.assertTrue(
+            'only €32.00' in error_context.transaction_warnings[0],
+            msg=error_context.transaction_warnings[0]
+        )
         self.assertEqual(len(error_context.transaction_errors), 0)
         self.assertEqual(len(prep.valid_transactions), 1)
         pt, = prep.valid_transactions
